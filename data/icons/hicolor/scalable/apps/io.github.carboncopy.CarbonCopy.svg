@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <!-- Disque original : bleu encre irisé -->
+    <radialGradient id="disc" cx="50" cy="52" r="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3d6fb6"/>
+      <stop offset="0.55" stop-color="#24508f"/>
+      <stop offset="1" stop-color="#173a6b"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="14" y1="16" x2="86" y2="88" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.45" stop-color="#9fd3ff" stop-opacity="0.45"/>
+      <stop offset="0.55" stop-color="#e3c8ff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Copie : feuille claire -->
+    <linearGradient id="paper" x1="0" y1="34" x2="0" y2="116" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e8edf4"/>
+    </linearGradient>
+    <linearGradient id="copydisc" x1="58" y1="58" x2="98" y2="98" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5b8fd6"/>
+      <stop offset="1" stop-color="#2a5aa0"/>
+    </linearGradient>
+    <!-- Tampon de validation -->
+    <linearGradient id="stamp" x1="0" y1="80" x2="0" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3ec46d"/>
+      <stop offset="1" stop-color="#26a269"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Disque original (arrière-plan) -->
+  <ellipse cx="50" cy="56" rx="42" ry="42" fill="#0d2442" opacity="0.18"/>
+  <circle cx="48" cy="52" r="42" fill="url(#disc)"/>
+  <circle cx="48" cy="52" r="42" fill="url(#sheen)"/>
+  <circle cx="48" cy="52" r="34" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="1.5"/>
+  <circle cx="48" cy="52" r="26" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="1.5"/>
+  <circle cx="48" cy="52" r="13" fill="#9db6d8"/>
+  <circle cx="48" cy="52" r="5.5" fill="#f6f8fb"/>
+
+  <!-- Copie conforme : fichier à coin plié -->
+  <path d="M60 38 h32 l18 18 v54 a6 6 0 0 1 -6 6 h-44 a6 6 0 0 1 -6 -6 v-66 a6 6 0 0 1 6 -6 z"
+        fill="#0d2442" opacity="0.20" transform="translate(0 3)"/>
+  <path d="M60 36 h32 l18 18 v54 a6 6 0 0 1 -6 6 h-44 a6 6 0 0 1 -6 -6 v-66 a6 6 0 0 1 6 -6 z"
+        fill="url(#paper)" stroke="#b9c4d3" stroke-width="1"/>
+  <path d="M92 36 v12 a6 6 0 0 0 6 6 h12 z" fill="#c9d3e0"/>
+
+  <!-- Empreinte du disque sur la copie -->
+  <circle cx="78" cy="78" r="20" fill="url(#copydisc)"/>
+  <circle cx="78" cy="78" r="14" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.2"/>
+  <circle cx="78" cy="78" r="6.5" fill="#dfe8f4"/>
+  <circle cx="78" cy="78" r="2.6" fill="#ffffff"/>
+  <rect x="62" y="104" width="22" height="3.5" rx="1.75" fill="#b9c4d3"/>
+
+  <!-- Tampon vert ✓ -->
+  <circle cx="102" cy="104" r="18" fill="#0d2442" opacity="0.20" transform="translate(0 2)"/>
+  <circle cx="102" cy="104" r="18" fill="url(#stamp)" stroke="#ffffff" stroke-width="3"/>
+  <path d="M93.5 104.5 l6 6 l11 -12" fill="none" stroke="#ffffff" stroke-width="4.5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
