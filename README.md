@@ -33,47 +33,48 @@ le rip d'un DVD, d'un Blu-ray ou d'un Blu-ray UHD.
 | **Nom** | Le nom du disque est nettoyé, puis complété via TMDB si une clé est configurée. Exemple : `Le_Grand_Film_2019.mkv`. |
 | **Rip** | MakeMKV extrait **toutes** les pistes (règle `+sel:all`, appliquée temporairement puis restaurée). Ensuite `mkvmerge` ne garde que les pistes cochées et pose les drapeaux `default` et `forced`. |
 
-## Prérequis (Fedora 40 ou plus récent)
+## Installation
+
+Une seule commande installe tout (paquets système, Rust si besoin, l'application, MakeMKV, l'accès au lecteur) puis lance Carbon Copy. Votre mot de passe administrateur est demandé une seule fois.
 
 ```bash
-sudo dnf install gcc rust cargo gtk4-devel libadwaita-devel flatpak
+curl -fsSL https://raw.githubusercontent.com/loganxwolverine/carbon-copy/main/install.sh | bash
 ```
 
-`mkvmerge` est conseillé en natif. S'il est absent, l'application installe le Flatpak MKVToolNix.
+Depuis une copie des sources, c'est la même chose :
 
 ```bash
-sudo dnf install mkvtoolnix
+./install.sh
 ```
 
-Les lecteurs Blu-ray ont besoin du module `sg` (périphériques `/dev/sg*`) :
+Distributions prises en charge :
+
+| Distribution | Versions |
+|---|---|
+| Fedora | 40 et plus |
+| Ubuntu (et Linux Mint 22, Pop!_OS 24.04, elementary OS 8) | 24.04 et plus |
+| Debian | 13 « Trixie » et plus |
+| Arch Linux (et Manjaro, EndeavourOS) | à jour |
+| openSUSE | Tumbleweed, Leap 16 |
+
+Carbon Copy demande GTK 4.14 et libadwaita 1.5 au minimum : Debian 12, Ubuntu 22.04 et Linux Mint 21 sont trop anciennes.
+
+Ce que fait le script :
+
+1. Installe les paquets système : GTK 4 / libadwaita, compilateur, Flatpak, MKVToolNix, eject.
+2. Installe Rust avec rustup, dans votre dossier personnel, si celui de la distribution est trop ancien.
+3. Compile Carbon Copy et l'installe dans `~/.local` (menu des applications et icône).
+4. Installe MakeMKV depuis Flathub, en mode utilisateur. La clé bêta est ensuite gérée par l'application.
+5. Prépare l'accès au lecteur : module `sg` chargé à chaque démarrage (Blu-ray) et groupe du lecteur si nécessaire. Dans ce dernier cas, fermez puis rouvrez votre session.
+6. Lance l'application.
+
+Relancer le script met l'application à jour. Pour la désinstaller (vos réglages sont conservés, ajoutez `--purge` pour les supprimer aussi) :
 
 ```bash
-echo sg | sudo tee /etc/modules-load.d/sg.conf
+./install.sh --uninstall
 ```
 
-```bash
-sudo modprobe sg
-```
-
-Votre utilisateur doit pouvoir lire `/dev/sr0`. Le groupe `cdrom` suffit, et c'est le cas par défaut sous GNOME.
-
-## Compilation et installation
-
-```bash
-cargo build --release
-```
-
-```bash
-install -Dm755 target/release/carbon-copy ~/.local/bin/carbon-copy
-```
-
-```bash
-install -Dm644 data/io.github.carboncopy.CarbonCopy.desktop ~/.local/share/applications/io.github.carboncopy.CarbonCopy.desktop
-```
-
-```bash
-install -Dm644 data/icons/hicolor/scalable/apps/io.github.carboncopy.CarbonCopy.svg ~/.local/share/icons/hicolor/scalable/apps/io.github.carboncopy.CarbonCopy.svg
-```
+`./install.sh --help` liste les autres options (`--no-launch`, `--skip-system`, `--skip-flatpak`).
 
 ## Tests
 

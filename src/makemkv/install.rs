@@ -127,7 +127,7 @@ pub async fn ensure_makemkv(tx: &Tx, http: &reqwest::Client) -> Result<Tool> {
     if !has_flatpak {
         bail!(
             "MakeMKV n'est pas installé et la commande « flatpak » est introuvable.\n\
-             Installez Flatpak (sudo dnf install flatpak) ou MakeMKV manuellement."
+             Relancez install.sh (il installe Flatpak), ou installez MakeMKV manuellement."
         );
     }
     flatpak_install_or_update(tx, MAKEMKV_FLATPAK).await.context("installation de MakeMKV")?;
@@ -143,7 +143,7 @@ pub async fn ensure_mkvmerge(tx: &Tx) -> Result<Tool> {
         return Ok(Tool::Native(p));
     }
     if !flatpak_available().await {
-        bail!("mkvmerge est introuvable. Installez-le : sudo dnf install mkvtoolnix");
+        bail!("mkvmerge est introuvable. Relancez install.sh ou installez le paquet « mkvtoolnix » de votre distribution.");
     }
     flatpak_install_or_update(tx, MKVTOOLNIX_FLATPAK).await.context("installation de MKVToolNix")?;
     Ok(Tool::Flatpak { app_id: MKVTOOLNIX_FLATPAK.into(), command: "mkvmerge".into() })
