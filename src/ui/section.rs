@@ -36,6 +36,7 @@ impl Section {
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
             .propagate_natural_height(true)
+            .max_content_height(420)
             .child(child)
             .build();
         s.content.append(&scroll);

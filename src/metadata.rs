@@ -259,11 +259,58 @@ pub struct Movie {
     /// Durée en minutes (fiche détaillée uniquement, absente des recherches).
     #[serde(default)]
     pub runtime: Option<u32>,
+    /// Image de fond (scène du film).
+    #[serde(default)]
+    pub backdrop_path: Option<String>,
+    /// Note moyenne sur 10.
+    #[serde(default)]
+    pub vote_average: Option<f64>,
+    /// Genres (fiche détaillée uniquement).
+    #[serde(default)]
+    pub genres: Vec<Named>,
+    /// Distribution et équipe (fiche détaillée, `append_to_response=credits`).
+    #[serde(default)]
+    pub credits: Option<Credits>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct Named {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct Credits {
+    #[serde(default)]
+    pub cast: Vec<Named>,
+    #[serde(default)]
+    pub crew: Vec<CrewMember>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct CrewMember {
+    pub name: String,
+    #[serde(default)]
+    pub job: String,
 }
 
 impl Movie {
     pub fn year(&self) -> Option<u32> {
         self.release_date.as_deref().and_then(|d| d.get(..4)).and_then(|y| y.parse().ok())
+    }
+
+    /// Réalisateur(s).
+    pub fn directors(&self) -> Vec<String> {
+        self.credits.iter().flat_map(|c| &c.crew).filter(|p| p.job == "Director").map(|p| p.name.clone()).collect()
+    }
+
+    /// Premiers rôles.
+    pub fn top_cast(&self, n: usize) -> Vec<String> {
+        self.credits.iter().flat_map(|c| &c.cast).take(n).map(|p| p.name.clone()).collect()
+    }
+
+    /// Note « 7,1 » (absente si aucun vote).
+    pub fn rating_label(&self) -> Option<String> {
+        self.vote_average.filter(|v| *v > 0.0).map(|v| format!("{v:.1}").replace('.', ","))
     }
 }
 
@@ -306,7 +353,7 @@ pub async fn tmdb_search(http: &reqwest::Client, api_key: &str, query: &str, yea
 /// Fiche d'un film à partir de son identifiant TMDB.
 pub async fn tmdb_movie(http: &reqwest::Client, api_key: &str, id: u64, lang: &str) -> Result<Movie> {
     tmdb_get(http, api_key, &format!("/movie/{id}"))
-        .query(&[("language", tmdb_language(lang))])
+        .query(&[("language", tmdb_language(lang)), ("append_to_response", "credits")])
         .send()
         .await?
         .error_for_status()
@@ -357,6 +404,19 @@ mod tests {
     use super::*;
     use crate::makemkv::disc::DiscInfo;
     use crate::makemkv::robot::parse_line;
+
+    #[test]
+    fn parses_movie_details() {
+        let json = r#"{"id":68924,"title":"Ice Storm","release_date":"1997-09-27","runtime":112,
+            "vote_average":7.06,"backdrop_path":"/b.jpg","genres":[{"id":18,"name":"Drame"}],
+            "credits":{"cast":[{"name":"Kevin Kline"},{"name":"Joan Allen"}],
+                       "crew":[{"name":"Ang Lee","job":"Director"},{"name":"X","job":"Editor"}]}}"#;
+        let m: Movie = serde_json::from_str(json).unwrap();
+        assert_eq!(m.directors(), vec!["Ang Lee"]);
+        assert_eq!(m.top_cast(1), vec!["Kevin Kline"]);
+        assert_eq!(m.rating_label().as_deref(), Some("7,1"));
+        assert_eq!(m.genres[0].name, "Drame");
+    }
 
     #[test]
     fn recognizes_tmdb_keys() {

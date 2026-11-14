@@ -93,6 +93,37 @@ pub fn french_lang_name(code: &str) -> Option<&'static str> {
     })
 }
 
+/// Drapeau (emoji) associé à une langue, pour repérer les pistes d'un coup d'œil.
+pub fn lang_flag(code: &str) -> &'static str {
+    match code {
+        "fra" => "🇫🇷",
+        "eng" => "🇬🇧",
+        "deu" => "🇩🇪",
+        "spa" => "🇪🇸",
+        "ita" => "🇮🇹",
+        "por" => "🇵🇹",
+        "nld" => "🇳🇱",
+        "jpn" => "🇯🇵",
+        "zho" => "🇨🇳",
+        "kor" => "🇰🇷",
+        "rus" => "🇷🇺",
+        "pol" => "🇵🇱",
+        "ces" => "🇨🇿",
+        "hun" => "🇭🇺",
+        "swe" => "🇸🇪",
+        "dan" => "🇩🇰",
+        "nor" => "🇳🇴",
+        "fin" => "🇫🇮",
+        "tur" => "🇹🇷",
+        "ara" => "🇸🇦",
+        "heb" => "🇮🇱",
+        "hin" => "🇮🇳",
+        "tha" => "🇹🇭",
+        "ell" => "🇬🇷",
+        _ => "🏳️",
+    }
+}
+
 /// Calcule la sélection par défaut d'un titre selon les préférences.
 pub fn default_selection(title: &Title, cfg: &Config) -> Selection {
     let lang = normalize_lang(&cfg.language);

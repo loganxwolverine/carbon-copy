@@ -1,5 +1,8 @@
 //! Composant « Lecteur » : modèle, firmware, connexion, capacités, disque inséré.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use adw::prelude::*;
 
 use super::section::Section;
@@ -11,6 +14,9 @@ pub struct DrivePanel {
     subtitle: gtk::Label,
     connection: gtk::Label,
     serial: gtk::Label,
+    /// Numéro de série réel ; masqué à l'écran tant qu'on ne clique pas sur l'œil.
+    serial_value: Rc<RefCell<String>>,
+    serial_btn: gtk::ToggleButton,
     reads: gtk::FlowBox,
     writes: gtk::FlowBox,
     media: gtk::Label,
@@ -61,11 +67,30 @@ impl DrivePanel {
         let head = head_text;
 
         let (connection, serial, media, region) = (value(), value(), value(), value());
+        serial.set_selectable(false);
+        serial.set_hexpand(false);
+        let serial_value: Rc<RefCell<String>> = Rc::default();
+        let serial_btn = gtk::ToggleButton::builder()
+            .icon_name("view-reveal-symbolic")
+            .tooltip_text("Afficher le numéro de série")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "circular"])
+            .build();
+        {
+            let (serial, value) = (serial.clone(), serial_value.clone());
+            serial_btn.connect_toggled(move |b| {
+                show_serial(&serial, &value.borrow(), b.is_active());
+                b.set_icon_name(if b.is_active() { "view-conceal-symbolic" } else { "view-reveal-symbolic" });
+            });
+        }
+        let serial_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        serial_box.append(&serial);
+        serial_box.append(&serial_btn);
         let (reads, writes) = (chips(), chips());
         let grid = gtk::Grid::builder().row_spacing(6).column_spacing(12).build();
         for (row, (k, w)) in [
             ("Connexion", connection.clone().upcast::<gtk::Widget>()),
-            ("N° de série", serial.clone().upcast()),
+            ("N° de série", serial_box.clone().upcast()),
             ("Lecture", reads.clone().upcast()),
             ("Gravure", writes.clone().upcast()),
             ("Zone DVD", region.clone().upcast()),
@@ -84,7 +109,7 @@ impl DrivePanel {
         section.content.append(&grid);
         section.content.append(&verdict);
         let root = section.root;
-        let p = Self { root, title, subtitle, connection, serial, reads, writes, media, region, verdict };
+        let p = Self { root, title, subtitle, connection, serial, serial_value, serial_btn, reads, writes, media, region, verdict };
         p.update(None);
         p
     }
@@ -96,6 +121,8 @@ impl DrivePanel {
             for l in [&self.connection, &self.serial, &self.media, &self.region] {
                 l.set_text("—");
             }
+            self.serial_value.replace(String::new());
+            self.serial_btn.set_visible(false);
             fill_chips(&self.reads, &[], &[]);
             fill_chips(&self.writes, &[], &[]);
             self.verdict.set_text("");
@@ -115,7 +142,9 @@ impl DrivePanel {
             conn.push(format!("{s}× max"));
         }
         self.connection.set_text(&conn.join(" · "));
-        self.serial.set_text(i.serial.as_deref().unwrap_or("—"));
+        self.serial_value.replace(i.serial.clone().unwrap_or_default());
+        self.serial_btn.set_visible(i.serial.is_some());
+        show_serial(&self.serial, &self.serial_value.borrow(), self.serial_btn.is_active());
         fill_chips(&self.reads, &i.reads, &["DVD", "Blu-ray"]);
         fill_chips(&self.writes, &i.writes, &[]);
         self.media.set_text(i.media.as_deref().unwrap_or("Aucun"));
@@ -144,6 +173,17 @@ impl DrivePanel {
             self.verdict.set_text("Ce lecteur ne lit ni les DVD ni les Blu-ray.");
             self.verdict.add_css_class("warning");
         }
+    }
+}
+
+/// Numéro de série en clair ou masqué (captures d'écran partagées…).
+fn show_serial(label: &gtk::Label, value: &str, reveal: bool) {
+    if value.is_empty() {
+        label.set_text("—");
+    } else if reveal {
+        label.set_text(value);
+    } else {
+        label.set_text(&"•".repeat(value.chars().count().min(12)));
     }
 }
 

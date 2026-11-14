@@ -52,6 +52,53 @@ const CSS: &str = "
 /* --- Fiche du film ---------------------------------------------------------- */
 .poster { border-radius: 12px; box-shadow: 0 6px 18px alpha(black, 0.45); }
 .movie-title { font-size: 2.1em; font-weight: 800; }
+.movie-chip { padding: 3px 11px; border-radius: 999px; font-size: 0.88em; background-color: alpha(currentColor, 0.16); border: 1px solid alpha(currentColor, 0.14); }
+.movie-chip.rating { background-color: alpha(#f5c211, 0.25); color: #f8e45c; font-weight: 800; }
+.movie-chip.genre { background-color: alpha(#3584e4, 0.22); }
+.movie-chip.person { background-color: alpha(white, 0.08); }
+.already-ripped { padding: 6px 12px; border-radius: 10px; background-color: alpha(#e5a50a, 0.22); }
+
+/* --- Pistes ------------------------------------------------------------------ */
+.codec { padding: 1px 8px; border-radius: 6px; font-size: 0.8em; font-weight: bold; background-color: alpha(currentColor, 0.10); }
+.codec.dts    { background-color: alpha(#ff7800, 0.28); }
+.codec.truehd { background-color: alpha(#c061cb, 0.30); }
+.codec.ac3    { background-color: alpha(#3584e4, 0.28); }
+.codec.lossless { background-color: alpha(#2ec27e, 0.28); }
+.codec.layout { background-color: alpha(#9a9996, 0.22); }
+.flag { font-size: 1.25em; }
+
+/* --- Frise des titres ---------------------------------------------------------- */
+.timeline { margin-top: 4px; }
+
+/* --- Nom du fichier en blocs ---------------------------------------------------- */
+.name-part { padding: 2px 8px; border-radius: 6px; font-family: monospace; font-size: 0.9em; }
+.name-part.title { background-color: alpha(#f5c211, 0.28); font-weight: bold; }
+.name-part.year  { background-color: alpha(#3584e4, 0.28); }
+.name-part.tmdb  { background-color: alpha(#01b4e4, 0.25); }
+.name-part.tech  { background-color: alpha(currentColor, 0.10); }
+.name-part.lang  { background-color: alpha(#2ec27e, 0.28); font-weight: bold; }
+
+/* --- Écran de rip ---------------------------------------------------------------- */
+.rip-poster { border-radius: 16px; box-shadow: 0 10px 30px alpha(black, 0.55); }
+.rip-title { font-size: 2.4em; font-weight: 800; }
+.rip-percent { font-size: 2.6em; font-weight: 800; }
+.rip-eta { font-size: 1.6em; font-weight: 700; }
+.rip-speed { font-size: 1.1em; }
+.step { padding: 6px 14px; border-radius: 999px; background-color: alpha(currentColor, 0.06); color: alpha(currentColor, 0.45); }
+.step.active { background-color: alpha(#3584e4, 0.30); color: inherit; font-weight: bold; }
+.step.done { background-color: alpha(#2ec27e, 0.25); color: inherit; }
+.step-arrow { color: alpha(currentColor, 0.35); }
+.done-title { font-size: 2.2em; font-weight: 800; color: #57e389; }
+.done-fact { padding: 8px 16px; border-radius: 12px; background-color: alpha(currentColor, 0.07); }
+.done-fact .value { font-size: 1.3em; font-weight: 800; }
+
+/* --- Vidéothèque ------------------------------------------------------------------ */
+.library-card { padding: 6px; border-radius: 14px; }
+.library-card:hover { background-color: alpha(currentColor, 0.07); }
+.library-poster { border-radius: 10px; box-shadow: 0 4px 12px alpha(black, 0.4); background-color: alpha(currentColor, 0.06); }
+.library-missing { opacity: 0.45; }
+.stat-value { font-size: 2em; font-weight: 800; }
+.hero-title { font-size: 2em; font-weight: 800; }
 .tag-row label.mono { font-family: monospace; }
 
 /* --- Zone d'action ---------------------------------------------------------- */
@@ -80,6 +127,8 @@ progressbar.rip > trough > progress {
 
 pub struct Theme {
     dynamic: gtk::CssProvider,
+    color: std::cell::Cell<(u8, u8, u8)>,
+    backdrop: std::cell::RefCell<Option<std::path::PathBuf>>,
 }
 
 impl Theme {
@@ -92,19 +141,52 @@ impl Theme {
             gtk::style_context_add_provider_for_display(&display, &fixed, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
             gtk::style_context_add_provider_for_display(&display, &dynamic, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
         }
-        let t = Self { dynamic };
+        let t = Self { dynamic, color: std::cell::Cell::new(DEFAULT_COLOR), backdrop: Default::default() };
         t.reset();
         t
     }
 
-    /// Couleur d'ambiance par défaut (violet GNOME).
+    /// Couleur d'ambiance par défaut (violet GNOME), sans image de fond.
     pub fn reset(&self) {
-        self.set_color((0x91, 0x41, 0xac));
+        self.backdrop.replace(None);
+        self.set_color(DEFAULT_COLOR);
+    }
+
+    pub fn color(&self) -> (u8, u8, u8) {
+        self.color.get()
+    }
+
+    /// Image de fond de la fiche du film (fichier local), ou aucune.
+    pub fn set_backdrop(&self, path: Option<std::path::PathBuf>) {
+        self.backdrop.replace(path);
+        self.apply();
     }
 
     /// Applique la couleur d'ambiance `(r, g, b)` à la fiche du film et au fond.
-    pub fn set_color(&self, (r, g, b): (u8, u8, u8)) {
+    pub fn set_color(&self, rgb: (u8, u8, u8)) {
+        self.color.set(rgb);
+        self.apply();
+    }
+
+    fn apply(&self) {
+        let (r, g, b) = self.color.get();
         let c = format!("rgb({r},{g},{b})");
+        // Image de fond : basse définition étirée (flou naturel), assombrie
+        // par un dégradé pour garder le texte lisible.
+        let (film_bg, rip_bg) = match self.backdrop.borrow().as_ref() {
+            Some(p) => {
+                let url = gtk::gio::File::for_path(p).uri();
+                (
+                    format!(
+                        "background-image: linear-gradient(90deg, alpha(@card_bg_color, 0.97) 0%, alpha(@card_bg_color, 0.90) 45%, alpha(@card_bg_color, 0.62) 75%, alpha({c}, 0.40) 100%), url(\"{url}\");\n  background-size: cover, cover;\n  background-position: center, center 30%;"
+                    ),
+                    format!(
+                        "background-image: linear-gradient(alpha(@window_bg_color, 0.80), alpha(@window_bg_color, 0.93)), url(\"{url}\");\n  background-size: cover, cover;\n  background-position: center, center;"
+                    ),
+                )
+            }
+            None => (format!("background-image: linear-gradient(105deg, alpha({c}, 0.30), alpha({c}, 0.0) 70%);"), String::new()),
+        };
         self.dynamic.load_from_string(&format!(
             "
 .ambient {{
@@ -114,13 +196,19 @@ impl Theme {
 }}
 .sec-film {{
   border-top-color: {c};
-  background-image: linear-gradient(105deg, alpha({c}, 0.30), alpha({c}, 0.0) 70%);
+  {film_bg}
 }}
 .sec-film .section-badge {{ background-color: {c}; }}
+.rip-screen {{
+  {rip_bg}
+}}
+.step.active {{ background-color: alpha({c}, 0.45); }}
 "
         ));
     }
 }
+
+const DEFAULT_COLOR: (u8, u8, u8) = (0x91, 0x41, 0xac);
 
 /// Couleur dominante « vive » d'une affiche.
 ///
@@ -152,7 +240,7 @@ pub fn dominant_color(texture: &gdk::Texture) -> (u8, u8, u8) {
         buckets[i].3 += weight;
     }
     let Some(best) = buckets.iter().filter(|b| b.3 > 0.0).max_by(|a, b| a.3.total_cmp(&b.3)) else {
-        return (0x91, 0x41, 0xac);
+        return DEFAULT_COLOR;
     };
     let (r, g, b) = (best.0 / best.3 / 255.0, best.1 / best.3 / 255.0, best.2 / best.3 / 255.0);
     let (hue, sat, _) = rgb_to_hsv(r, g, b);

@@ -17,6 +17,7 @@ mod config;
 mod drive;
 mod drive_info;
 mod events;
+mod history;
 mod makemkv;
 mod metadata;
 mod process;
@@ -34,7 +35,13 @@ fn main() -> gtk::glib::ExitCode {
     let _ = backend::runtime();
     config::migrate_legacy_dir();
 
-    let app = adw::Application::builder().application_id(APP_ID).build();
+    // Mode démo (développement) : instance indépendante de celle de l'utilisateur.
+    let flags = if std::env::var_os("CARBON_COPY_DEMO").is_some() {
+        gtk::gio::ApplicationFlags::NON_UNIQUE
+    } else {
+        gtk::gio::ApplicationFlags::empty()
+    };
+    let app = adw::Application::builder().application_id(APP_ID).flags(flags).build();
     app.connect_startup(|_| {
         // Icône : thème installé (~/.local/share/icons) ou, à défaut, celle des
         // sources (lancement depuis `target/`).

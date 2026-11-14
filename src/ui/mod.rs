@@ -1,11 +1,15 @@
 //! Contrôleur de l'interface : relie les widgets, l'état et les tâches de fond.
 
 mod drive_panel;
+mod launcher;
+mod library;
 mod movie_card;
 mod movie_dialog;
 mod prefs;
+mod rip_view;
 mod section;
 mod theme;
+mod timeline;
 mod tmdb_setup;
 mod widgets;
 
@@ -20,7 +24,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::backend::{self, runtime, Extracted, Extraction, FinishJob, RIP_WEIGHT};
 use crate::config::Config;
-use crate::events::{AppEvent, Tx};
+use crate::events::{AppEvent, Estimate, Phase, Tx};
+use crate::history;
 use crate::makemkv::disc::{DiscInfo, StreamKind, Title};
 use crate::makemkv::rule;
 use crate::makemkv::robot::format_duration;
@@ -84,6 +89,10 @@ struct State {
     awaiting_metadata: bool,
     /// Compteur de modifications de la sélection (anti-rebond).
     selection_gen: u64,
+    /// Début du rip (durée affichée à la fin).
+    rip_started: Option<std::time::Instant>,
+    /// Dernier fichier produit (boutons « Lire » et « Ouvrir le dossier »).
+    last_output: Option<PathBuf>,
 }
 
 pub struct App {
@@ -117,9 +126,13 @@ pub fn build(app: &adw::Application) {
         }
     });
 
-    // Surveillance du lecteur optique (dure toute la vie de l'application).
-    runtime().spawn(crate::drive::watch(this.tx.clone(), CancellationToken::new()));
-    this.start_setup();
+    if let Ok(robot_file) = std::env::var("CARBON_COPY_DEMO") {
+        this.run_demo(robot_file);
+    } else {
+        // Surveillance du lecteur optique (dure toute la vie de l'application).
+        runtime().spawn(crate::drive::watch(this.tx.clone(), CancellationToken::new()));
+        this.start_setup();
+    }
     if this.state.borrow().cfg.fullscreen {
         this.ui.window.fullscreen();
     } else {
@@ -147,7 +160,10 @@ fn schedule_debug_screenshot(window: &adw::ApplicationWindow) {
     let Ok(path) = std::env::var("CARBON_COPY_SCREENSHOT") else { return };
     let every = std::env::var("CARBON_COPY_SCREENSHOT_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(10);
     let window = window.clone();
+    let counter = std::cell::Cell::new(0u32);
     glib::timeout_add_seconds_local(every, move || {
+        counter.set(counter.get() + 1);
+        let path = path.replace("{n}", &format!("{:02}", counter.get()));
         let (w, h) = (window.width(), window.height());
         let paintable = gtk::WidgetPaintable::new(Some(&window));
         let snapshot = gtk::Snapshot::new();
@@ -172,6 +188,48 @@ fn schedule_debug_screenshot(window: &adw::ApplicationWindow) {
 }
 
 impl App {
+    /// Mode démo (développement, `CARBON_COPY_DEMO=<sortie robot de makemkvcon info>`) :
+    /// accueil, puis disque tiré du fichier (fiche TMDB réelle), puis rip simulé.
+    /// Ni MakeMKV ni le lecteur ne sont utilisés, rien n'est écrit.
+    fn run_demo(self: &Rc<Self>, robot_file: String) {
+        let lines: Vec<_> = std::fs::read_to_string(&robot_file)
+            .unwrap_or_default()
+            .lines()
+            .map(crate::makemkv::robot::parse_line)
+            .collect();
+        let mut info = DiscInfo::from_lines(&lines);
+        info.device = "/dev/sr0".into();
+        self.show_nodisc();
+        let me = self.clone();
+        glib::timeout_add_seconds_local_once(8, move || {
+            me.show_disc(info.clone());
+            let cfg = me.state.borrow().cfg.clone();
+            runtime().spawn(backend::lookup_metadata(me.tx.clone(), cfg, info));
+            let me = me.clone();
+            glib::timeout_add_seconds_local_once(12, move || {
+                let output = me.output_path().unwrap_or_else(|| "/tmp/demo.mkv".into());
+                let name = output.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let poster = me.ui.movie.poster.paintable();
+                me.ui.rip_view.start(&me.display_title(), &name, poster, me.ui.theme.color(), true);
+                me.ui.disc_stack.set_visible_child_name("rip");
+                me.set_ripping_ui(true);
+                let est = Estimate { bytes_per_sec: Some(5.8e6), remaining: std::time::Duration::from_secs(9 * 60) };
+                me.show_rip_progress(Phase::Copy, "Enregistrement des titres sur le disque dur", 0.58, Some(est));
+                let me = me.clone();
+                glib::timeout_add_seconds_local_once(10, move || {
+                    me.set_ripping_ui(false);
+                    me.ui.launcher.set_progress(None);
+                    let secs = {
+                        let s = me.state.borrow();
+                        s.disc.as_ref().and_then(|d| d.titles.get(s.title_index)).map(|t| t.duration_secs()).unwrap_or(0)
+                    };
+                    me.ui.rip_view.finish(&me.display_title(), &name, 4_052_305_028, secs, std::time::Duration::from_secs(1105));
+                    me.ui.action_zone.set_visible(false);
+                });
+            });
+        });
+    }
+
     // ------------------------------------------------------------------
     // Signaux
     // ------------------------------------------------------------------
@@ -229,6 +287,30 @@ impl App {
 
         let me = self.clone();
         self.ui.eject_btn.connect_clicked(move |_| me.eject());
+
+        // Frise des titres : un clic choisit le titre (comme la liste).
+        let me = self.clone();
+        self.ui.timeline.connect_pick(move |i| me.ui.title_combo.set_selected(i as u32));
+
+        // Nom de fichier découpé en blocs colorés, quelle que soit la saisie.
+        let me = self.clone();
+        self.ui.filename_entry.connect_changed(move |e| fill_name_parts(&me.ui.name_parts, &e.text()));
+
+        // Écran de fin de rip.
+        let me = self.clone();
+        self.ui.rip_view.play_btn.connect_clicked(move |_| {
+            if let Some(p) = me.state.borrow().last_output.clone() {
+                gtk::FileLauncher::new(Some(&gio::File::for_path(p))).launch(Some(&me.ui.window), gio::Cancellable::NONE, |_| {});
+            }
+        });
+        let me = self.clone();
+        self.ui.rip_view.folder_btn.connect_clicked(move |_| {
+            if let Some(p) = me.state.borrow().last_output.clone() {
+                gtk::FileLauncher::new(Some(&gio::File::for_path(p))).open_containing_folder(Some(&me.ui.window), gio::Cancellable::NONE, |_| {});
+            }
+        });
+        let me = self.clone();
+        self.ui.rip_view.next_btn.connect_clicked(move |_| me.next_disc());
 
         let me = self.clone();
         self.ui.folder_btn.connect_clicked(move |_| me.choose_folder());
@@ -367,7 +449,7 @@ impl App {
                 let first = self.state.borrow().loaded_drives.iter().next().cloned();
                 match first {
                     Some(d) => self.start_analysis(d),
-                    None => self.ui.stack.set_visible_child_name("nodisc"),
+                    None => self.show_nodisc(),
                 }
             }
             AppEvent::SetupFailed(e) => {
@@ -418,13 +500,9 @@ impl App {
                     self.prepare_extraction(idx);
                 }
             }
-            AppEvent::ExtractProgress { id, label, fraction } => self.on_extract_progress(id, label, fraction),
+            AppEvent::ExtractProgress { id, phase, label, fraction, estimate } => self.on_extract_progress(id, phase, label, fraction, estimate),
             AppEvent::Extracted { id, result } => self.on_extracted(id, result),
-            AppEvent::RipProgress { label, fraction } => {
-                self.ui.progress_bar.set_fraction(fraction.clamp(0.0, 1.0));
-                self.ui.progress_bar.set_text(Some(&format!("{:.1} %", fraction * 100.0)));
-                self.ui.progress_label.set_text(&label);
-            }
+            AppEvent::RipProgress { phase, label, fraction, estimate } => self.show_rip_progress(phase, &label, fraction, estimate),
             AppEvent::RipFinished(res) => self.on_rip_finished(res),
         }
     }
@@ -492,7 +570,44 @@ impl App {
             s.disc = None;
             s.device = None;
             drop(s);
-            self.ui.stack.set_visible_child_name("nodisc");
+            // Écran « Copie terminée » : il reste affiché après l'éjection.
+            let done_screen = self.ui.stack.visible_child_name().as_deref() == Some("disc")
+                && self.ui.disc_stack.visible_child_name().as_deref() == Some("rip");
+            if !done_screen {
+                self.show_nodisc();
+            }
+        }
+    }
+
+    /// Accueil : invitation à insérer un disque et vidéothèque à jour.
+    fn show_nodisc(self: &Rc<Self>) {
+        self.ui.stack.set_visible_child_name("nodisc");
+        self.ui.launcher.set_progress(None);
+        let (dir, key) = {
+            let s = self.state.borrow();
+            (s.output_dir.clone(), s.cfg.tmdb_api_key.clone())
+        };
+        let me = self.clone();
+        glib::spawn_future_local(async move {
+            let entries = runtime().spawn_blocking(move || history::library(&dir)).await.unwrap_or_default();
+            let me2 = me.clone();
+            let open: Rc<dyn Fn(PathBuf)> = Rc::new(move |p: PathBuf| {
+                gtk::FileLauncher::new(Some(&gio::File::for_path(p))).launch(Some(&me2.ui.window), gio::Cancellable::NONE, |_| {});
+            });
+            me.ui.library.fill(&entries, &key, open);
+        });
+    }
+
+    /// « Disque suivant » sur l'écran de fin.
+    fn next_disc(self: &Rc<Self>) {
+        self.ui.disc_stack.set_visible_child_name("details");
+        self.ui.action_zone.set_visible(true);
+        let (disc, loaded) = {
+            let s = self.state.borrow();
+            (s.disc.is_some(), s.device.as_ref().is_some_and(|d| s.loaded_drives.contains(d)))
+        };
+        if !(disc && loaded) {
+            self.show_nodisc();
         }
     }
 
@@ -534,6 +649,8 @@ impl App {
             s.awaiting_metadata = true;
         }
         self.fill_title_list(main);
+        self.ui.disc_stack.set_visible_child_name("details");
+        self.ui.action_zone.set_visible(true);
 
         // Fiche du film en attente du résultat TMDB.
         self.apply_movie(None);
@@ -579,6 +696,15 @@ impl App {
         self.ui.title_model.splice(0, n, &refs);
         self.ui.title_combo.set_selected(main as u32);
         self.state.borrow_mut().updating = false;
+        let bars = self
+            .state
+            .borrow()
+            .disc
+            .as_ref()
+            .map(|d| d.titles.iter().map(|t| timeline::Bar { index: t.index, secs: t.duration_secs(), main: t.index == main }).collect())
+            .unwrap_or_default();
+        self.ui.timeline.set_titles(bars);
+        self.ui.timeline.set_selected(main);
     }
 
     /// Durée du film connue : choisit le titre qui lui correspond le mieux
@@ -613,6 +739,7 @@ impl App {
             s.selection = default_selection(&t, &s.cfg);
             t
         };
+        self.ui.timeline.set_selected(index);
         self.ui.duration_row.set_subtitle(&format!(
             "{} ({})",
             format_duration(title.duration_secs()),
@@ -629,16 +756,24 @@ impl App {
         self.ui.subs_list.remove_all();
 
         for s in title.streams_of(StreamKind::Audio) {
-            let row = self.track_row(&s.lang_name(), &s.summary(), sel.audio.contains(&s.index), s.index, StreamKind::Audio);
+            let name = format!("{}  {}", crate::selection::lang_flag(&s.lang()), s.lang_name());
+            let row = self.track_row(&name, &audio_extras(s), sel.audio.contains(&s.index), s.index, StreamKind::Audio);
+            for c in codec_chips(s) {
+                row.add_suffix(&c);
+            }
             self.ui.audio_list.append(&row);
         }
         for s in title.streams_of(StreamKind::Subtitle) {
+            let flag = crate::selection::lang_flag(&s.lang());
             let (name, sub) = if s.is_forced() {
-                (format!("{} — forcés", s.lang_name()), format!("{} · passages en langue étrangère uniquement", s.codec()))
+                (format!("{flag}  {} — forcés", s.lang_name()), "passages en langue étrangère uniquement".to_string())
             } else {
-                (s.lang_name(), format!("{} · sous-titres complets", s.codec()))
+                (format!("{flag}  {}", s.lang_name()), "sous-titres complets".to_string())
             };
             let row = self.track_row(&name, &sub, sel.subtitles.contains(&s.index), s.index, StreamKind::Subtitle);
+            for c in codec_chips(s) {
+                row.add_suffix(&c);
+            }
             if s.is_forced() {
                 let tag = gtk::Label::builder().label("forcé").valign(gtk::Align::Center).css_classes(["accent", "caption-heading"]).build();
                 row.add_suffix(&tag);
@@ -757,8 +892,12 @@ impl App {
             self.ui.tmdb_entry.set_text("");
         }
         self.update_movie_card();
+        self.ui.movie.set_chips(movie.as_ref());
+        self.show_already_ripped(movie.as_ref().map(|m| m.id));
         let runtime_known = movie.as_ref().is_some_and(|m| m.runtime.is_some());
+        let backdrop = movie.as_ref().and_then(|m| m.backdrop_path.clone().map(|b| (m.id, b)));
         self.load_poster(movie.and_then(|m| m.poster_path));
+        self.load_backdrop(backdrop);
         self.regenerate_filename();
         if runtime_known {
             self.refine_main_title();
@@ -798,6 +937,55 @@ impl App {
                 self.ui.movie.poster_stack.set_visible_child_name("placeholder");
             }
         }
+    }
+
+    /// Bandeau « déjà copié » si ce film figure dans l'historique.
+    fn show_already_ripped(self: &Rc<Self>, tmdb_id: Option<u64>) {
+        self.ui.movie.already.set_visible(false);
+        let Some(id) = tmdb_id else { return };
+        let me = self.clone();
+        glib::spawn_future_local(async move {
+            let found = runtime().spawn_blocking(move || history::find_by_tmdb(id)).await.ok().flatten();
+            // Un autre film a pu être choisi entre-temps.
+            if me.state.borrow().movie.as_ref().map(|m| m.id) != Some(id) {
+                return;
+            }
+            if let Some(e) = found {
+                let name = e.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                me.ui.movie.already.set_text(&format!("⚠ Déjà copié le {} : {name} ({})", e.date_label(), e.size_label()));
+                me.ui.movie.already.set_visible(true);
+            }
+        });
+    }
+
+    /// Image de fond de la fiche : petite image TMDB étirée (floue), en cache.
+    fn load_backdrop(self: &Rc<Self>, backdrop: Option<(u64, String)>) {
+        let gen = self.state.borrow().poster_gen;
+        let Some((id, path)) = backdrop else {
+            self.ui.theme.set_backdrop(None);
+            return;
+        };
+        let file = gtk::glib::user_cache_dir().join(crate::config::APP_DIR).join("backdrops").join(format!("{id}.jpg"));
+        let me = self.clone();
+        glib::spawn_future_local(async move {
+            let f = file.clone();
+            let ok = runtime()
+                .spawn(async move {
+                    if f.exists() {
+                        return true;
+                    }
+                    let Ok(bytes) = metadata::fetch_poster(backend::http(), &path, "w300").await else { return false };
+                    if let Some(d) = f.parent() {
+                        let _ = std::fs::create_dir_all(d);
+                    }
+                    std::fs::write(&f, bytes).is_ok()
+                })
+                .await
+                .unwrap_or(false);
+            if me.state.borrow().poster_gen == gen {
+                me.ui.theme.set_backdrop(ok.then_some(file));
+            }
+        });
     }
 
     fn load_poster(self: &Rc<Self>, poster_path: Option<String>) {
@@ -1014,6 +1202,22 @@ impl App {
         };
         self.set_ripping_ui(true);
         append_log(&self.ui.log_view, &format!("▶ Rip vers {}", output.display()));
+        {
+            let mut s = self.state.borrow_mut();
+            s.rip_started = Some(std::time::Instant::now());
+            s.last_output = None;
+        }
+        let poster = (self.ui.movie.poster_stack.visible_child_name().as_deref() == Some("poster")).then(|| self.ui.movie.poster.paintable()).flatten();
+        let eject = self.state.borrow().cfg.eject_when_done;
+        self.ui.rip_view.start(
+            &self.display_title(),
+            &output.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            poster,
+            self.ui.theme.color(),
+            eject,
+        );
+        self.ui.disc_stack.set_visible_child_name("rip");
+        self.ui.launcher.set_progress(Some(0.0));
 
         // Extraction déjà prête, en cours, ou à lancer ?
         let state = {
@@ -1032,19 +1236,33 @@ impl App {
             }
             Some((None, fraction, label)) => {
                 append_log(&self.ui.log_view, "Extraction déjà en cours : le rip la reprend.");
-                self.show_rip_progress(&label, fraction * RIP_WEIGHT);
+                self.show_rip_progress(Phase::Copy, &label, fraction * RIP_WEIGHT, None);
             }
             _ => {
-                self.show_rip_progress("Démarrage de MakeMKV…", 0.0);
+                self.show_rip_progress(Phase::Copy, "Démarrage de MakeMKV…", 0.0, None);
                 self.start_extraction(title);
             }
         }
     }
 
-    fn show_rip_progress(&self, label: &str, fraction: f64) {
+    fn show_rip_progress(&self, phase: Phase, label: &str, fraction: f64, estimate: Option<Estimate>) {
         self.ui.progress_bar.set_fraction(fraction.clamp(0.0, 1.0));
-        self.ui.progress_bar.set_text(Some(&format!("{:.1} %", fraction * 100.0)));
-        self.ui.progress_label.set_text(label);
+        self.ui.progress_bar.set_text(Some(&format!("{:.1} %", fraction * 100.0).replace('.', ",")));
+        self.ui.progress_label.set_text(&match &estimate {
+            Some(e) => format!("{label} · {}", crate::progress::describe(e)),
+            None => label.to_string(),
+        });
+        self.ui.rip_view.update(phase, label, fraction, estimate);
+        self.ui.launcher.set_progress(Some(fraction));
+    }
+
+    /// « Titre (Année) » tel qu'affiché et inscrit dans le fichier.
+    fn display_title(&self) -> String {
+        let movie = self.ui.movie_entry.text().trim().to_string();
+        match self.year() {
+            Some(y) => format!("{movie} ({y})"),
+            None => movie,
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1134,7 +1352,7 @@ impl App {
         }
     }
 
-    fn on_extract_progress(self: &Rc<Self>, id: u64, label: String, fraction: f64) {
+    fn on_extract_progress(self: &Rc<Self>, id: u64, phase: Phase, label: String, fraction: f64, estimate: Option<Estimate>) {
         let ripping = {
             let mut s = self.state.borrow_mut();
             let Some(e) = s.extraction.as_mut().filter(|e| e.id == id) else { return };
@@ -1143,11 +1361,12 @@ impl App {
             s.pending_output.is_some()
         };
         if ripping {
-            self.show_rip_progress(&label, fraction * RIP_WEIGHT);
+            self.show_rip_progress(phase, &label, fraction * RIP_WEIGHT, estimate);
         } else {
             self.ui.progress_bar.set_fraction(fraction);
             self.ui.progress_bar.set_text(Some(&format!("Préparation {:.0} %", fraction * 100.0)));
-            self.ui.progress_label.set_text(&format!("Préparation en arrière-plan — {label}"));
+            let eta = estimate.map(|e| format!(" · {}", crate::progress::describe(&e))).unwrap_or_default();
+            self.ui.progress_label.set_text(&format!("Préparation en arrière-plan — {label}{eta}"));
         }
     }
 
@@ -1253,11 +1472,35 @@ impl App {
             }
         }
         self.set_ripping_ui(false);
+        self.ui.launcher.set_progress(None);
+        let succeeded = res.is_ok();
         match res {
             Ok(path) => {
-                let msg = format!("Rip terminé : {}", path.file_name().unwrap_or_default().to_string_lossy());
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 append_log(&self.ui.log_view, &format!("✔ {}", path.display()));
-                self.toast(&msg);
+                self.toast(&format!("Rip terminé : {file_name}"));
+                // Écran de fin et historique (vidéothèque, alerte « déjà copié »).
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                let (elapsed, film_secs, movie) = {
+                    let mut s = self.state.borrow_mut();
+                    s.last_output = Some(path.clone());
+                    let secs = s.disc.as_ref().and_then(|d| d.titles.get(s.title_index)).map(|t| t.duration_secs()).unwrap_or(0);
+                    (s.rip_started.take().map(|t| t.elapsed()).unwrap_or_default(), secs, s.movie.clone())
+                };
+                self.ui.rip_view.finish(&self.display_title(), &file_name, size, film_secs, elapsed);
+                self.ui.action_zone.set_visible(false);
+                let entry = history::Entry {
+                    title: self.ui.movie_entry.text().trim().to_string(),
+                    year: self.year(),
+                    tmdb_id: metadata::parse_tmdb_id(&self.ui.tmdb_entry.text()),
+                    poster_path: movie.and_then(|m| m.poster_path),
+                    path: path.clone(),
+                    size,
+                    date: history::today(),
+                };
+                if let Err(e) = history::add(entry) {
+                    append_log(&self.ui.log_view, &format!("⚠ Historique non enregistré : {e}"));
+                }
                 // Notification système si la fenêtre n'a pas le focus.
                 if !self.ui.window.is_active() {
                     let n = gio::Notification::new("Rip terminé");
@@ -1279,6 +1522,10 @@ impl App {
                 d.present(Some(&self.ui.window));
             }
         }
+        if succeeded {
+            return; // L'écran « Copie terminée » reste affiché.
+        }
+        self.ui.disc_stack.set_visible_child_name("details");
         // Un disque a pu être éjecté / changé pendant le rip.
         let (loaded, current) = {
             let s = self.state.borrow();
@@ -1286,7 +1533,7 @@ impl App {
         };
         if let Some(dev) = current {
             if !loaded.contains(&dev) {
-                self.ui.stack.set_visible_child_name("nodisc");
+                self.show_nodisc();
             }
         }
     }
@@ -1318,4 +1565,93 @@ impl App {
             }
         });
     }
+}
+
+/// Particularités d'une piste audio (sous-titre de la ligne).
+fn audio_extras(s: &crate::makemkv::disc::Stream) -> String {
+    let mut parts = Vec::new();
+    if s.is_commentary() {
+        parts.push("commentaire");
+    }
+    if s.is_visually_impaired() {
+        parts.push("audiodescription");
+    }
+    if s.is_derived_core() {
+        parts.push("cœur dérivé");
+    }
+    parts.join(" · ")
+}
+
+/// Pastilles colorées : format (DTS, AC3, TrueHD…) et canaux (5.1, 2.0…).
+fn codec_chips(s: &crate::makemkv::disc::Stream) -> Vec<gtk::Label> {
+    let id = s.codec_id();
+    let codec = s.codec();
+    let class = if id.contains("TRUEHD") {
+        "truehd"
+    } else if id.contains("DTS") {
+        if codec.contains("MA") { "lossless" } else { "dts" }
+    } else if id.contains("AC3") {
+        "ac3"
+    } else if id.contains("FLAC") || id.contains("PCM") {
+        "lossless"
+    } else {
+        "other"
+    };
+    let label = match id {
+        "S_VOBSUB" => "VobSub",
+        "S_HDMV/PGS" => "PGS",
+        "S_TEXT/UTF8" => "SRT",
+        "S_TEXT/ASS" | "S_TEXT/SSA" => "ASS",
+        _ if codec.is_empty() => id,
+        _ => codec,
+    };
+    let mut chips = vec![gtk::Label::builder().label(label).valign(gtk::Align::Center).css_classes(["codec", class]).build()];
+    let layout = match s.channels() {
+        0 => String::new(),
+        1 => "1.0".into(),
+        2 => "2.0".into(),
+        6 => "5.1".into(),
+        8 => "7.1".into(),
+        n => format!("{n} canaux"),
+    };
+    if !layout.is_empty() {
+        chips.push(gtk::Label::builder().label(&layout).valign(gtk::Align::Center).css_classes(["codec", "layout"]).build());
+    }
+    chips
+}
+
+/// Découpe le nom de fichier en blocs colorés : titre, année, identifiant
+/// TMDB, caractéristiques techniques, langue.
+fn fill_name_parts(flow: &gtk::FlowBox, name: &str) {
+    flow.remove_all();
+    let add = |text: &str, class: &str| {
+        flow.append(&gtk::Label::builder().label(text).css_classes(["name-part", class]).build());
+    };
+    let stem = name.trim().trim_end_matches(".mkv");
+    let (head, tech) = match stem.split_once(" - ") {
+        Some((h, t)) => (h, Some(t)),
+        None => (stem, None),
+    };
+    let year_re = regex::Regex::new(r"^(.*?)\s*\((\d{4})\)(.*)$").unwrap();
+    let (title, year, rest) = match year_re.captures(head) {
+        Some(c) => (c[1].to_string(), Some(c[2].to_string()), c[3].to_string()),
+        None => (head.to_string(), None, String::new()),
+    };
+    if !title.is_empty() {
+        add(&title, "title");
+    }
+    if let Some(y) = year {
+        add(&y, "year");
+    }
+    for part in rest.split(']').map(|p| p.trim().trim_start_matches('[')).filter(|p| !p.is_empty()) {
+        add(part, if part.starts_with("tmdbid-") { "tmdb" } else { "tech" });
+    }
+    if let Some(t) = tech {
+        let words: Vec<&str> = t.split_whitespace().collect();
+        for (i, w) in words.iter().enumerate() {
+            let last = i + 1 == words.len();
+            add(w, if last && w.chars().any(|c| c.is_alphabetic()) && !w.contains('.') { "lang" } else { "tech" });
+        }
+    }
+    flow.append(&gtk::Label::builder().label(".mkv").css_classes(["name-part", "tech"]).build());
 }

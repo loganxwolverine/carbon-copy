@@ -6,6 +6,20 @@
 use std::path::PathBuf;
 
 use crate::makemkv::disc::DiscInfo;
+pub use crate::progress::Estimate;
+
+/// Étapes d'un rip, affichées dans la frise de progression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Phase {
+    /// Lecture du disque par MakeMKV.
+    Copy,
+    /// Contrôle des pistes du fichier produit.
+    Verify,
+    /// Drapeaux (mkvpropedit), remux éventuel, mise en place du fichier.
+    Finalize,
+    /// Éjection du disque.
+    Eject,
+}
 use crate::process::Tool;
 
 #[derive(Debug)]
@@ -29,11 +43,11 @@ pub enum AppEvent {
     /// Film reconnu sur TMDB (`movie`), ou à défaut titre/année déduits du disque.
     Metadata { movie: Option<crate::metadata::Movie>, title: String, year: Option<u32> },
     /// Progression d'une extraction MakeMKV (0.0 – 1.0).
-    ExtractProgress { id: u64, label: String, fraction: f64 },
+    ExtractProgress { id: u64, phase: Phase, label: String, fraction: f64, estimate: Option<Estimate> },
     /// Fin d'une extraction : MKV produit et pistes qu'il contient.
     Extracted { id: u64, result: Result<crate::backend::Extracted, String> },
     /// Progression du rip (0.0 – 1.0) et libellé de phase.
-    RipProgress { label: String, fraction: f64 },
+    RipProgress { phase: Phase, label: String, fraction: f64, estimate: Option<Estimate> },
     /// Fin du rip.
     RipFinished(Result<PathBuf, String>),
 }

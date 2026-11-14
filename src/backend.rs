@@ -15,14 +15,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::beta_key::{self, KeyUpdate};
 use crate::config::{Config, APP_DIR};
-use crate::events::{emit, log, status, AppEvent, Tx};
+use crate::events::{emit, log, status, AppEvent, Phase, Tx};
 use crate::makemkv::cli::{self, KeyProblem};
 use crate::makemkv::disc::{DiscInfo, StreamKind, Title};
 use crate::makemkv::rule::Plan;
 use crate::makemkv::{install, settings};
 use crate::metadata;
 use crate::process::Tool;
-use crate::progress::{self, Rate};
+use crate::progress::Rate;
 use crate::remux;
 use crate::selection::Selection;
 
@@ -242,6 +242,7 @@ async fn extract_inner(tx: &Tx, job: &Extraction, cancel: CancellationToken) -> 
     loop {
         let raw = run_makemkv(tx, job, &plan, cancel.clone()).await?;
         // MakeMKV a-t-il appliqué la règle comme prévu ?
+        emit(tx, AppEvent::ExtractProgress { id: job.id, phase: Phase::Verify, label: "Vérification des pistes…".into(), fraction: 1.0, estimate: None });
         let tracks = match remux::identify(&job.mkvmerge, &raw).await {
             Ok(t) => t,
             Err(e) => {
@@ -276,15 +277,12 @@ async fn run_makemkv(tx: &Tx, job: &Extraction, plan: &Plan, cancel: Cancellatio
     // y compris en cas d'erreur ou d'annulation.
     let _guard = settings::override_selection(&plan.rule)?;
     log(tx, format!("Extraction du titre {} vers {} (règle : {})", job.title.index, job.tmp.display(), plan.rule));
-    emit(tx, AppEvent::ExtractProgress { id: job.id, label: "Démarrage de MakeMKV…".into(), fraction: 0.0 });
+    emit(tx, AppEvent::ExtractProgress { id: job.id, phase: Phase::Copy, label: "Démarrage de MakeMKV…".into(), fraction: 0.0, estimate: None });
     let rate = Mutex::new(Rate::new(job.title.size_bytes()));
     let raw = with_key_retry(tx, &job.cfg, || {
         cli::rip(&job.makemkv, &job.device, job.title.index, job.cfg.min_length_secs, &job.tmp, tx, cancel.clone(), |label, f| {
-            let label = match rate.lock().unwrap().update(f) {
-                Some(e) => format!("{label} · {}", progress::describe(&e)),
-                None => label,
-            };
-            emit(tx, AppEvent::ExtractProgress { id: job.id, label, fraction: f })
+            let estimate = rate.lock().unwrap().update(f);
+            emit(tx, AppEvent::ExtractProgress { id: job.id, phase: Phase::Copy, label, fraction: f, estimate })
         })
     })
     .await?;
@@ -313,6 +311,7 @@ pub async fn finish(tx: Tx, job: FinishJob, cancel: CancellationToken) {
     let res = finish_inner(&tx, &job, cancel).await;
     remove_tmp_dir(&job.tmp).await;
     if res.is_ok() && job.cfg.eject_when_done {
+        emit(&tx, AppEvent::RipProgress { phase: Phase::Eject, label: "Éjection du disque…".into(), fraction: 1.0, estimate: None });
         eject(&tx, job.device.clone()).await;
     }
     emit(&tx, AppEvent::RipFinished(res.map_err(|e| format!("{e:#}"))));
@@ -329,13 +328,13 @@ async fn finish_inner(tx: &Tx, job: &FinishJob, cancel: CancellationToken) -> Re
 
     // 1. Le fichier contient exactement la sélection : drapeaux posés en place.
     if remux::matches_contents(&job.title, &job.selection, &tracks) && videos <= 1 {
-        emit(tx, AppEvent::RipProgress { label: "Finalisation : titre et drapeaux des pistes…".into(), fraction: RIP_WEIGHT });
+        emit(tx, AppEvent::RipProgress { phase: Phase::Finalize, label: "Finalisation : titre et drapeaux des pistes…".into(), fraction: RIP_WEIGHT, estimate: None });
         match job.mkvmerge.sibling("mkvpropedit") {
             Some(pe) => match remux::set_properties(&pe, &job.title, &job.selection, &tracks, raw, &job.movie_title, lang, tx).await {
                 Ok(()) => {
                     move_file(tx, raw, &job.output).await?;
                     log(tx, "Aucun remux nécessaire : fichier final obtenu sans réécriture.");
-                    emit(tx, AppEvent::RipProgress { label: "Terminé".into(), fraction: 1.0 });
+                    emit(tx, AppEvent::RipProgress { phase: Phase::Finalize, label: "Terminé".into(), fraction: 1.0, estimate: None });
                     return Ok(job.output.clone());
                 }
                 Err(e) => log(tx, format!("⚠ {e:#} : repli sur un remux complet.")),
@@ -352,7 +351,7 @@ async fn finish_inner(tx: &Tx, job: &FinishJob, cancel: CancellationToken) -> Re
         }
     }
     let label = "Remux des pistes sélectionnées";
-    emit(tx, AppEvent::RipProgress { label: format!("{label}…"), fraction: RIP_WEIGHT });
+    emit(tx, AppEvent::RipProgress { phase: Phase::Finalize, label: format!("{label}…"), fraction: RIP_WEIGHT, estimate: None });
     let rate = Mutex::new(Rate::new(need));
     let out = remux::remux(
         &job.mkvmerge,
@@ -366,15 +365,12 @@ async fn finish_inner(tx: &Tx, job: &FinishJob, cancel: CancellationToken) -> Re
         tx,
         cancel,
         |f| {
-            let label = match rate.lock().unwrap().update(f) {
-                Some(e) => format!("{label} · {}", progress::describe(&e)),
-                None => format!("{label}…"),
-            };
-            emit(tx, AppEvent::RipProgress { label, fraction: RIP_WEIGHT + f * (1.0 - RIP_WEIGHT) })
+            let estimate = rate.lock().unwrap().update(f);
+            emit(tx, AppEvent::RipProgress { phase: Phase::Finalize, label: format!("{label}…"), fraction: RIP_WEIGHT + f * (1.0 - RIP_WEIGHT), estimate })
         },
     )
     .await?;
-    emit(tx, AppEvent::RipProgress { label: "Terminé".into(), fraction: 1.0 });
+    emit(tx, AppEvent::RipProgress { phase: Phase::Finalize, label: "Terminé".into(), fraction: 1.0, estimate: None });
     Ok(out)
 }
 
@@ -418,7 +414,7 @@ async fn move_file(tx: &Tx, from: &Path, to: &Path) -> Result<()> {
         Ok(()) => Ok(()),
         Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
             log(tx, format!("Copie vers {} (autre disque)…", to.display()));
-            emit(tx, AppEvent::RipProgress { label: "Copie vers la destination…".into(), fraction: RIP_WEIGHT });
+            emit(tx, AppEvent::RipProgress { phase: Phase::Finalize, label: "Copie vers la destination…".into(), fraction: RIP_WEIGHT, estimate: None });
             tokio::fs::copy(from, to).await.with_context(|| format!("copie vers {}", to.display()))?;
             let _ = tokio::fs::remove_file(from).await;
             Ok(())

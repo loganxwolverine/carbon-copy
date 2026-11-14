@@ -20,9 +20,13 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 
 use super::drive_panel::DrivePanel;
+use super::launcher::Launcher;
+use super::library::Library;
 use super::movie_card::MovieCard;
+use super::rip_view::RipView;
 use super::section::Section;
 use super::theme::Theme;
+use super::timeline::Timeline;
 
 pub const APP_NAME: &str = "Carbon Copy";
 
@@ -41,8 +45,15 @@ pub struct Ui {
     pub retry_btn: gtk::Button,
     pub analysis_bar: gtk::ProgressBar,
 
+    pub launcher: Launcher,
     /// Panneau « lecteur » de la page d'attente et de la page disque.
     pub nodisc_drive: DrivePanel,
+    pub library: Library,
+    /// Page disque : « details » (fiche et pistes) ou « rip » (copie en cours).
+    pub disc_stack: gtk::Stack,
+    pub rip_view: RipView,
+    pub timeline: Timeline,
+    pub name_parts: gtk::FlowBox,
     pub disc_drive: DrivePanel,
     pub movie: MovieCard,
 
@@ -67,6 +78,8 @@ pub struct Ui {
     pub progress_bar: gtk::ProgressBar,
     pub progress_label: gtk::Label,
     pub rip_btn: gtk::Button,
+    /// Barre du bas (progression + bouton), masquée sur l'écran de fin.
+    pub action_zone: gtk::Box,
 
     pub log_view: gtk::TextView,
 }
@@ -109,13 +122,33 @@ pub fn build(app: &adw::Application) -> Ui {
     let retry_btn = gtk::Button::builder().label("Réessayer").halign(gtk::Align::Center).css_classes(["pill"]).build();
     let error_page = adw::StatusPage::builder().icon_name("dialog-error-symbolic").title("MakeMKV n'est pas disponible").child(&retry_btn).build();
 
+    // Accueil : invitation + lecteur à gauche, vidéothèque à droite.
     let nodisc_drive = DrivePanel::new();
-    let nodisc_page = adw::StatusPage::builder()
-        .icon_name("media-optical-symbolic")
-        .title("Insérez un disque")
-        .description("Un DVD, un Blu-ray ou un Blu-ray UHD sera analysé automatiquement.")
-        .child(&adw::Clamp::builder().maximum_size(560).child(&nodisc_drive.root).build())
-        .build();
+    let library = Library::new();
+    let hero_icon = gtk::Image::builder().icon_name("media-optical-symbolic").pixel_size(72).css_classes(["dim-label"]).build();
+    let hero_text = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).valign(gtk::Align::Center).build();
+    hero_text.append(&gtk::Label::builder().label("Insérez un disque").xalign(0.0).css_classes(["hero-title"]).build());
+    hero_text.append(
+        &gtk::Label::builder()
+            .label("Un DVD, un Blu-ray ou un Blu-ray UHD sera analysé automatiquement.")
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .build(),
+    );
+    let hero = gtk::Box::new(gtk::Orientation::Horizontal, 18);
+    hero.append(&hero_icon);
+    hero.append(&hero_text);
+    let left = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(24).width_request(560).hexpand(false).build();
+    left.append(&hero);
+    nodisc_drive.root.set_valign(gtk::Align::Start);
+    nodisc_drive.root.set_vexpand(false);
+    left.append(&nodisc_drive.root);
+    left.append(&library.stats.root);
+    let left = adw::Clamp::builder().maximum_size(620).tightening_threshold(620).child(&left).hexpand(false).build();
+    let nodisc_page = gtk::Box::builder().spacing(24).margin_top(24).margin_bottom(24).margin_start(24).margin_end(24).build();
+    nodisc_page.append(&left);
+    nodisc_page.append(&library.section.root);
 
     let analysis_bar = gtk::ProgressBar::builder().show_text(true).width_request(320).halign(gtk::Align::Center).build();
     let analysis_box = gtk::Box::new(gtk::Orientation::Vertical, 18);
@@ -142,7 +175,11 @@ pub fn build(app: &adw::Application) -> Ui {
     for r in [type_row.upcast_ref::<gtk::Widget>(), name_row.upcast_ref(), title_combo.upcast_ref(), duration_row.upcast_ref()] {
         disc_list.append(r);
     }
-    let disc_section = Section::scrolled("Disque", "media-optical-symbolic", "sec-disc", &disc_list);
+    let timeline = Timeline::new();
+    let disc_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    disc_box.append(&disc_list);
+    disc_box.append(&timeline.root);
+    let disc_section = Section::scrolled("Disque", "media-optical-symbolic", "sec-disc", &disc_box);
 
     let audio_list = boxed_list();
     let audio_section = Section::scrolled("Pistes audio", "audio-speakers-symbolic", "sec-audio", &audio_list);
@@ -164,8 +201,20 @@ pub fn build(app: &adw::Application) -> Ui {
     movie_entry.add_suffix(&tmdb_btn);
     let year_entry = adw::EntryRow::builder().title("Année").input_purpose(gtk::InputPurpose::Digits).build();
     let tmdb_entry = adw::EntryRow::builder().title("Identifiant TMDB (Entrée pour charger)").show_apply_button(true).build();
-    let tags_row = adw::ActionRow::builder().title("Caractéristiques du média").css_classes(["property"]).subtitle_selectable(true).build();
+    // Les caractéristiques apparaissent déjà dans les blocs du nom de fichier.
+    let tags_row = adw::ActionRow::builder().title("Caractéristiques du média").css_classes(["property"]).subtitle_selectable(true).visible(false).build();
     let filename_entry = adw::EntryRow::builder().title("Nom du fichier").build();
+    let name_parts = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .max_children_per_line(30)
+        .row_spacing(4)
+        .column_spacing(4)
+        .margin_top(8)
+        .margin_bottom(8)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    let name_parts_row = gtk::ListBoxRow::builder().activatable(false).selectable(false).child(&name_parts).build();
     let folder_btn = gtk::Button::builder().icon_name("folder-open-symbolic").tooltip_text("Choisir le dossier de destination").valign(gtk::Align::Center).css_classes(["flat"]).build();
     let folder_row = adw::ActionRow::builder().title("Dossier de destination").subtitle_selectable(true).build();
     folder_row.add_suffix(&folder_btn);
@@ -176,6 +225,7 @@ pub fn build(app: &adw::Application) -> Ui {
         year_entry.upcast_ref(),
         tmdb_entry.upcast_ref(),
         tags_row.upcast_ref(),
+        name_parts_row.upcast_ref(),
         filename_entry.upcast_ref(),
         folder_row.upcast_ref(),
     ] {
@@ -185,11 +235,14 @@ pub fn build(app: &adw::Application) -> Ui {
 
     // Quatre colonnes de même largeur et de même hauteur. Le bandeau du haut
     // suit la même grille : Film = 3 colonnes, Lecteur = la 4e.
+    // La rangée du film prend la hauteur disponible (image de fond) ; celle
+    // des pistes garde la hauteur de son contenu.
     let grid = gtk::Grid::builder().column_spacing(18).row_spacing(18).column_homogeneous(true).vexpand(true).build();
+    movie.root.set_vexpand(true);
     grid.attach(&movie.root, 0, 0, 3, 1);
     grid.attach(&disc_drive.root, 3, 0, 1, 1);
     for (i, sec) in [&disc_section, &audio_section, &subs_section, &out_section].into_iter().enumerate() {
-        sec.root.set_vexpand(true);
+        sec.root.set_vexpand(false);
         grid.attach(&sec.root, i as i32, 1, 1, 1);
     }
 
@@ -215,11 +268,22 @@ pub fn build(app: &adw::Application) -> Ui {
     action_zone.append(&progress_box);
     action_zone.append(&rip_btn);
 
+    let rip_view = RipView::new();
+    let disc_stack = gtk::Stack::builder().transition_type(gtk::StackTransitionType::Crossfade).transition_duration(450).vexpand(true).build();
+    disc_stack.add_named(&disc_content, Some("details"));
+    disc_stack.add_named(&rip_view.root, Some("rip"));
+
     let disc_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    disc_page.append(&disc_content);
+    disc_page.append(&disc_stack);
     disc_page.append(&action_zone);
 
-    let stack = gtk::Stack::builder().transition_type(gtk::StackTransitionType::Crossfade).vexpand(true).hexpand(true).css_classes(["ambient"]).build();
+    let stack = gtk::Stack::builder()
+        .transition_type(gtk::StackTransitionType::Crossfade)
+        .transition_duration(350)
+        .vexpand(true)
+        .hexpand(true)
+        .css_classes(["ambient"])
+        .build();
     stack.add_named(&setup_page, Some("setup"));
     stack.add_named(&error_page, Some("error"));
     stack.add_named(&nodisc_page, Some("nodisc"));
@@ -290,7 +354,13 @@ pub fn build(app: &adw::Application) -> Ui {
         error_page,
         retry_btn,
         analysis_bar,
+        launcher: Launcher::new(),
         nodisc_drive,
+        library,
+        disc_stack,
+        rip_view,
+        timeline,
+        name_parts,
         disc_drive,
         movie,
         disc_content,
@@ -314,6 +384,7 @@ pub fn build(app: &adw::Application) -> Ui {
         progress_bar,
         progress_label,
         rip_btn,
+        action_zone,
         log_view,
     }
 }

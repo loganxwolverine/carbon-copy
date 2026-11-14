@@ -157,25 +157,6 @@ impl Stream {
         self.get(attr::VIDEO_SIZE)
     }
 
-    /// Libellé lisible pour l'interface, ex. « TrueHD Atmos · 7.1 ».
-    pub fn summary(&self) -> String {
-        let mut parts = vec![self.codec().to_string()];
-        match self.get(attr::AUDIO_LAYOUT) {
-            "" => {}
-            l => parts.push(l.to_string()),
-        }
-        if self.is_commentary() {
-            parts.push("commentaire".into());
-        }
-        if self.is_visually_impaired() {
-            parts.push("audiodescription".into());
-        }
-        if self.is_derived_core() {
-            parts.push("cœur dérivé".into());
-        }
-        parts.retain(|p| !p.is_empty());
-        parts.join(" · ")
-    }
 }
 
 /// Un titre (playlist) du disque.
