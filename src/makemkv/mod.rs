@@ -4,5 +4,6 @@ pub mod cli;
 pub mod disc;
 pub mod install;
 pub mod robot;
+pub mod rule;
 pub mod sdf;
 pub mod settings;

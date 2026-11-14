@@ -67,6 +67,8 @@ pub mod attr {
     pub const DISK_SIZE_BYTES: u32 = 11;
     pub const AUDIO_CHANNELS: u32 = 14;
     pub const SOURCE_FILE: u32 = 16;
+    /// Ordre de lecture des segments (`1-21`, `5,3,4,1…`).
+    pub const SEGMENTS_MAP: u32 = 26;
     pub const VIDEO_SIZE: u32 = 19;
     pub const STREAM_FLAGS: u32 = 22;
     pub const TREE_INFO: u32 = 30;

@@ -50,11 +50,26 @@ pub fn show(parent: &adw::ApplicationWindow, cfg: Config, tx: Tx, on_close: impl
     // --- Métadonnées -------------------------------------------------------
     let meta_group = adw::PreferencesGroup::builder()
         .title("Métadonnées")
-        .description("Clé API TMDB (v3) ou jeton de lecture (v4), gratuit sur themoviedb.org.")
+        .description("Reconnaissance du film, affiche et nommage : clé API TMDB (v3) ou jeton de lecture (v4), gratuits.")
         .build();
     let tmdb_row = adw::PasswordEntryRow::builder().title("Clé API TMDB").build();
     tmdb_row.set_text(&cfg.borrow().tmdb_api_key);
     meta_group.add(&tmdb_row);
+    let wizard_btn = gtk::Button::builder().label("Obtenir une clé…").valign(gtk::Align::Center).build();
+    let wizard_row = adw::ActionRow::builder()
+        .title("Pas encore de clé ?")
+        .subtitle("Assistant pas à pas : compte gratuit, demande de clé, détection automatique")
+        .build();
+    wizard_row.add_suffix(&wizard_btn);
+    wizard_row.set_activatable_widget(Some(&wizard_btn));
+    meta_group.add(&wizard_row);
+    {
+        let (parent, tmdb_row) = (parent.clone(), tmdb_row.clone());
+        wizard_btn.connect_clicked(move |_| {
+            let row = tmdb_row.clone();
+            super::tmdb_setup::show(&parent, &tmdb_row.text(), move |k| row.set_text(&k));
+        });
+    }
 
     // --- Extraction --------------------------------------------------------
     let rip_group = adw::PreferencesGroup::builder().title("Extraction").build();

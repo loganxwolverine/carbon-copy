@@ -43,6 +43,12 @@ const CSS: &str = "
 .chip { padding: 1px 9px; border-radius: 999px; font-size: 0.85em; background-color: alpha(currentColor, 0.08); }
 .chip-accent { background-color: alpha(#2ec27e, 0.25); color: #57e389; font-weight: bold; }
 
+/* --- Assistant TMDB ------------------------------------------------------- */
+.step-badge {
+  min-width: 28px; min-height: 28px; border-radius: 999px;
+  font-weight: 800; color: white; background-color: #01b4e4;
+}
+
 /* --- Fiche du film ---------------------------------------------------------- */
 .poster { border-radius: 12px; box-shadow: 0 6px 18px alpha(black, 0.45); }
 .movie-title { font-size: 2.1em; font-weight: 800; }

@@ -30,8 +30,8 @@ pub enum AppEvent {
     Metadata { movie: Option<crate::metadata::Movie>, title: String, year: Option<u32> },
     /// Progression d'une extraction MakeMKV (0.0 – 1.0).
     ExtractProgress { id: u64, label: String, fraction: f64 },
-    /// Fin d'une extraction : chemin du MKV brut.
-    Extracted { id: u64, result: Result<PathBuf, String> },
+    /// Fin d'une extraction : MKV produit et pistes qu'il contient.
+    Extracted { id: u64, result: Result<crate::backend::Extracted, String> },
     /// Progression du rip (0.0 – 1.0) et libellé de phase.
     RipProgress { label: String, fraction: f64 },
     /// Fin du rip.

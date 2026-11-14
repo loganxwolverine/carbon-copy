@@ -205,6 +205,30 @@ impl Title {
     pub fn source(&self) -> &str {
         self.get(attr::SOURCE_FILE)
     }
+
+    /// Segments lus dans l'ordre croissant ?
+    ///
+    /// Les Blu-ray « protégés » (Disney, Lionsgate…) contiennent des dizaines
+    /// de playlists de même durée qui enchaînent les segments dans le désordre ;
+    /// seule la vraie version du film les lit dans l'ordre. Un plan inconnu
+    /// compte comme ordonné.
+    pub fn segments_in_order(&self) -> bool {
+        let mut seq: Vec<u64> = Vec::new();
+        for part in self.get(attr::SEGMENTS_MAP).split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            match part.split_once('-') {
+                Some((a, b)) => match (a.trim().parse::<u64>(), b.trim().parse::<u64>()) {
+                    (Ok(a), Ok(b)) if a <= b => seq.extend([a, b]),
+                    (Ok(_), Ok(_)) => return false,
+                    _ => return true,
+                },
+                None => match part.parse() {
+                    Ok(n) => seq.push(n),
+                    Err(_) => return true,
+                },
+            }
+        }
+        seq.windows(2).all(|w| w[0] < w[1])
+    }
     pub fn streams_of(&self, kind: StreamKind) -> impl Iterator<Item = &Stream> {
         self.streams.iter().filter(move |s| s.kind() == kind)
     }
@@ -288,11 +312,27 @@ impl DiscInfo {
         }
     }
 
-    /// Titre principal : le plus long, puis le plus de chapitres, puis le plus gros.
+    /// Titre principal sans autre information : voir [`Self::main_title_for`].
     pub fn main_title(&self) -> Option<usize> {
+        self.main_title_for(None)
+    }
+
+    /// Titre principal, en s'aidant si possible de la durée du film (TMDB).
+    ///
+    /// Par ordre de priorité :
+    /// 1. une durée proche de celle du film (± 12 % : marge pour les génériques
+    ///    et l'accélération PAL de 4 % des DVD), ce qui écarte les « lecture
+    ///    intégrale » et les bonus enchaînés ;
+    /// 2. des segments lus dans l'ordre (écarte les fausses playlists) ;
+    /// 3. la durée la plus longue, puis le plus de chapitres, puis la taille.
+    pub fn main_title_for(&self, runtime_secs: Option<u64>) -> Option<usize> {
+        let near = |t: &Title| match runtime_secs {
+            Some(r) if r > 0 => t.duration_secs().abs_diff(r) * 100 <= r * 12,
+            _ => true,
+        };
         self.titles
             .iter()
-            .max_by_key(|t| (t.duration_secs(), t.chapters(), t.size_bytes()))
+            .max_by_key(|t| (near(t), t.segments_in_order(), t.duration_secs(), t.chapters(), t.size_bytes()))
             .map(|t| t.index)
     }
 }
@@ -327,6 +367,25 @@ SINFO:1,5,1,6203,"Subtitles"
 SINFO:1,5,3,0,"eng""#;
         let lines: Vec<_> = raw.lines().map(parse_line).collect();
         DiscInfo::from_lines(&lines)
+    }
+
+    #[test]
+    fn main_title_uses_runtime_and_segment_order() {
+        let raw = r#"TINFO:0,9,0,"3:10:00"
+TINFO:0,26,0,"1-40"
+TINFO:1,9,0,"1:58:30"
+TINFO:1,26,0,"1,5,3,2,4"
+TINFO:2,9,0,"1:58:30"
+TINFO:2,26,0,"1-5"
+TINFO:3,9,0,"1:58:30"
+TINFO:3,26,0,"2,1,3-5""#;
+        let lines: Vec<_> = raw.lines().map(parse_line).collect();
+        let d = DiscInfo::from_lines(&lines);
+        // Sans durée : la « lecture intégrale » de 3 h 10 l'emporte.
+        assert_eq!(d.main_title(), Some(0));
+        // Film de 2 h 02 : parmi les titres proches, celui aux segments ordonnés.
+        assert_eq!(d.main_title_for(Some(122 * 60)), Some(2));
+        assert!(!d.titles[3].segments_in_order());
     }
 
     #[test]

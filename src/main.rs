@@ -7,7 +7,8 @@
 //! - `beta_key`  : récupération / installation autonome de la clé bêta
 //! - `selection` : règles de pré-sélection des pistes (sous-titres forcés…)
 //! - `metadata`  : nettoyage du nom de disque, TMDB, nommage du fichier
-//! - `remux`     : tri final des pistes avec mkvmerge
+//! - `remux`     : vérification, drapeaux (mkvpropedit) ou tri des pistes (mkvmerge)
+//! - `progress`  : vitesse et temps restant
 //! - `drive`     : détection d'insertion de disque (ioctl)
 
 mod backend;
@@ -19,6 +20,7 @@ mod events;
 mod makemkv;
 mod metadata;
 mod process;
+mod progress;
 mod remux;
 mod selection;
 mod ui;

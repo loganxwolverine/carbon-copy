@@ -43,6 +43,21 @@ impl Tool {
         }
     }
 
+    /// Autre commande du même paquet (ex. `mkvpropedit` à côté de `mkvmerge`).
+    pub fn sibling(&self, name: &str) -> Option<Tool> {
+        match self {
+            Tool::Native(p) => {
+                let next = p.with_file_name(name);
+                if next.is_file() {
+                    Some(Tool::Native(next))
+                } else {
+                    which(name).map(Tool::Native)
+                }
+            }
+            Tool::Flatpak { app_id, .. } => Some(Tool::Flatpak { app_id: app_id.clone(), command: name.into() }),
+        }
+    }
+
     pub fn describe(&self) -> String {
         match self {
             Tool::Native(p) => format!("{} (natif)", p.display()),

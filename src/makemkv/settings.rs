@@ -11,7 +11,7 @@ use regex::Regex;
 
 pub const KEY_ENTRY: &str = "app_Key";
 pub const SELECTION_ENTRY: &str = "app_DefaultSelectionString";
-/// Règle de sélection « tout extraire » : le tri fin est fait ensuite par mkvmerge.
+/// Règle de sélection « tout extraire » (plan de secours).
 pub const SELECT_ALL: &str = "+sel:all";
 
 pub fn settings_path() -> PathBuf {
@@ -91,7 +91,7 @@ pub fn is_beta_key(key: &str) -> bool {
 //
 // `makemkvcon` n'accepte pas de sélection de pistes en ligne de commande : il
 // applique `app_DefaultSelectionString`. Pendant un rip on la remplace donc par
-// `+sel:all`, puis on restaure la valeur d'origine. La valeur d'origine est
+// la règle calculée (voir `rule`), puis on restaure la valeur d'origine. La valeur d'origine est
 // aussi mémorisée sur disque pour être restaurée au prochain lancement si
 // l'application est tuée en plein rip.
 
@@ -101,16 +101,20 @@ fn restore_file() -> PathBuf {
 
 const ABSENT: &str = "\u{0}absent";
 
-/// Remplace la règle de sélection par `+sel:all` ; renvoie un garde qui la
+/// Remplace la règle de sélection par `rule` ; renvoie un garde qui la
 /// restaure automatiquement lorsqu'il est détruit.
-pub fn override_selection() -> Result<SelectionGuard> {
-    let original = get(SELECTION_ENTRY);
+pub fn override_selection(rule: &str) -> Result<SelectionGuard> {
     let rf = restore_file();
-    if let Some(d) = rf.parent() {
-        std::fs::create_dir_all(d)?;
+    // Une surcharge précédente non restaurée (application tuée) : on garde la
+    // valeur d'origine déjà mémorisée plutôt que d'enregistrer notre propre règle.
+    if !rf.exists() {
+        let original = get(SELECTION_ENTRY);
+        if let Some(d) = rf.parent() {
+            std::fs::create_dir_all(d)?;
+        }
+        std::fs::write(&rf, original.as_deref().unwrap_or(ABSENT))?;
     }
-    std::fs::write(&rf, original.as_deref().unwrap_or(ABSENT))?;
-    set(SELECTION_ENTRY, Some(SELECT_ALL))?;
+    set(SELECTION_ENTRY, Some(rule))?;
     Ok(SelectionGuard)
 }
 

@@ -38,6 +38,8 @@ pub struct Config {
     pub prepare_in_background: bool,
     /// Démarrer en plein écran (mémorisé à chaque bascule F11).
     pub fullscreen: bool,
+    /// L'assistant de clé TMDB a déjà été proposé au premier lancement.
+    pub tmdb_prompted: bool,
     /// Sources de la clé bêta, essayées dans l'ordre.
     pub beta_key_sources: Vec<String>,
 }
@@ -54,6 +56,7 @@ impl Default for Config {
             min_length_secs: 120,
             eject_when_done: false,
             fullscreen: true,
+            tmdb_prompted: false,
             prepare_in_background: true,
             beta_key_sources: vec![
                 // Source officielle : le fil du forum où l'auteur de MakeMKV publie la clé.

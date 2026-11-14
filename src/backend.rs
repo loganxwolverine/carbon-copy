@@ -6,21 +6,23 @@
 //! exclusivement via des [`AppEvent`] envoyés sur un canal `async_channel`,
 //! lu côté GTK par `glib::spawn_future_local`.
 
-use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 
 use crate::beta_key::{self, KeyUpdate};
 use crate::config::{Config, APP_DIR};
 use crate::events::{emit, log, status, AppEvent, Tx};
 use crate::makemkv::cli::{self, KeyProblem};
-use crate::makemkv::disc::{DiscInfo, Title};
+use crate::makemkv::disc::{DiscInfo, StreamKind, Title};
+use crate::makemkv::rule::Plan;
 use crate::makemkv::{install, settings};
 use crate::metadata;
 use crate::process::Tool;
+use crate::progress::{self, Rate};
 use crate::remux;
 use crate::selection::Selection;
 
@@ -181,6 +183,8 @@ pub async fn lookup_metadata(tx: Tx, cfg: Config, info: DiscInfo) {
         match metadata::tmdb_search(http(), cfg.tmdb_api_key.trim(), &title, year, &cfg.language).await {
             Ok(results) => match results.into_iter().next() {
                 Some(m) => {
+                    // La fiche détaillée donne la durée, utile au choix du titre principal.
+                    let m = metadata::tmdb_movie(http(), cfg.tmdb_api_key.trim(), m.id, &cfg.language).await.unwrap_or(m);
                     log(&tx, format!("TMDB : « {} » ({}) [tmdbid-{}]", m.title, m.year().map(|y| y.to_string()).unwrap_or("année inconnue".into()), m.id));
                     movie = Some(m);
                 }
@@ -194,20 +198,34 @@ pub async fn lookup_metadata(tx: Tx, cfg: Config, info: DiscInfo) {
 
 // --- Rip -------------------------------------------------------------------
 
-/// Extraction MakeMKV d'un titre (toutes pistes) dans un dossier temporaire.
+/// Extraction MakeMKV d'un titre dans un dossier temporaire placé à côté de
+/// la destination (même disque : le fichier final y est simplement renommé).
 ///
-/// Elle ne dépend QUE du titre : le tri des pistes est fait ensuite par
-/// mkvmerge. On peut donc la lancer dès la fin de l'analyse, pendant que
-/// l'utilisateur vérifie la fiche et les pistes ; le rip proprement dit n'a
-/// alors plus qu'à attendre la fin de la copie puis remuxer.
+/// Seules les pistes du plan (voir `makemkv::rule`) sont extraites. Elle
+/// peut démarrer dès la fin de l'analyse, pendant que l'utilisateur vérifie
+/// la fiche et les pistes ; le rip n'a ensuite qu'à attendre la fin de la
+/// copie puis poser les drapeaux.
 pub struct Extraction {
     /// Numéro de la tentative (permet d'ignorer les événements périmés).
     pub id: u64,
     pub makemkv: Tool,
+    pub mkvmerge: Tool,
     pub device: String,
-    pub title: usize,
+    pub title: Title,
+    /// Sélection au lancement (le plan en est déduit).
+    pub selection: Selection,
+    pub plan: Plan,
     pub tmp: PathBuf,
     pub cfg: Config,
+}
+
+/// Résultat d'une extraction.
+#[derive(Debug, Clone)]
+pub struct Extracted {
+    /// MKV produit par MakeMKV.
+    pub raw: PathBuf,
+    /// Pistes audio / sous-titres présentes dans le fichier.
+    pub contents: Selection,
 }
 
 pub async fn extract(tx: Tx, job: Extraction, cancel: CancellationToken) {
@@ -219,15 +237,53 @@ pub async fn extract(tx: Tx, job: Extraction, cancel: CancellationToken) {
     emit(&tx, AppEvent::Extracted { id: job.id, result: res.map_err(|e| format!("{e:#}")) });
 }
 
-async fn extract_inner(tx: &Tx, job: &Extraction, cancel: CancellationToken) -> Result<PathBuf> {
+async fn extract_inner(tx: &Tx, job: &Extraction, cancel: CancellationToken) -> Result<Extracted> {
+    let mut plan = job.plan.clone();
+    loop {
+        let raw = run_makemkv(tx, job, &plan, cancel.clone()).await?;
+        // MakeMKV a-t-il appliqué la règle comme prévu ?
+        let tracks = match remux::identify(&job.mkvmerge, &raw).await {
+            Ok(t) => t,
+            Err(e) => {
+                log(tx, format!("⚠ Vérification des pistes impossible ({e:#}) : le rip retriera les pistes."));
+                return Ok(Extracted { raw, contents: plan.contents });
+            }
+        };
+        if remux::matches_contents(&job.title, &plan.contents, &tracks) {
+            log(tx, "Pistes extraites conformes à la sélection.");
+            return Ok(Extracted { raw, contents: plan.contents });
+        }
+        // Inattendu : toutes les pistes voulues sont-elles au moins présentes ?
+        let all_found = [(StreamKind::Audio, &job.selection.audio), (StreamKind::Subtitle, &job.selection.subtitles)]
+            .into_iter()
+            .all(|(k, want)| {
+                let want: Vec<usize> = want.iter().copied().collect();
+                remux::map_tracks(&job.title, &plan.contents, &tracks, k, &want).len() == want.len()
+            });
+        if all_found || plan.rule == settings::SELECT_ALL {
+            log(tx, "⚠ Pistes extraites différentes du plan : elles seront triées par mkvmerge.");
+            return Ok(Extracted { raw, contents: plan.contents });
+        }
+        log(tx, format!("⚠ MakeMKV n'a pas appliqué la règle « {} » comme prévu : nouvelle extraction de toutes les pistes.", plan.rule));
+        let _ = tokio::fs::remove_file(&raw).await;
+        plan = Plan::all(&job.title);
+    }
+}
+
+async fn run_makemkv(tx: &Tx, job: &Extraction, plan: &Plan, cancel: CancellationToken) -> Result<PathBuf> {
     tokio::fs::create_dir_all(&job.tmp).await?;
     // Le garde restaure la règle de sélection MakeMKV dès la fin de l'extraction,
     // y compris en cas d'erreur ou d'annulation.
-    let _guard = settings::override_selection()?;
-    log(tx, format!("Extraction du titre {} vers {}", job.title, job.tmp.display()));
+    let _guard = settings::override_selection(&plan.rule)?;
+    log(tx, format!("Extraction du titre {} vers {} (règle : {})", job.title.index, job.tmp.display(), plan.rule));
     emit(tx, AppEvent::ExtractProgress { id: job.id, label: "Démarrage de MakeMKV…".into(), fraction: 0.0 });
+    let rate = Mutex::new(Rate::new(job.title.size_bytes()));
     let raw = with_key_retry(tx, &job.cfg, || {
-        cli::rip(&job.makemkv, &job.device, job.title, job.cfg.min_length_secs, &job.tmp, tx, cancel.clone(), |label, f| {
+        cli::rip(&job.makemkv, &job.device, job.title.index, job.cfg.min_length_secs, &job.tmp, tx, cancel.clone(), |label, f| {
+            let label = match rate.lock().unwrap().update(f) {
+                Some(e) => format!("{label} · {}", progress::describe(&e)),
+                None => label,
+            };
             emit(tx, AppEvent::ExtractProgress { id: job.id, label, fraction: f })
         })
     })
@@ -236,14 +292,14 @@ async fn extract_inner(tx: &Tx, job: &Extraction, cancel: CancellationToken) -> 
     Ok(raw)
 }
 
-/// Finalisation : remux des pistes choisies, suppression du dossier temporaire,
-/// éjection éventuelle.
+/// Finalisation : titre et drapeaux (ou remux si des pistes sont en trop),
+/// fichier placé à destination, dossier temporaire supprimé, éjection.
 pub struct FinishJob {
     pub mkvmerge: Tool,
     pub device: String,
     pub title: Title,
     pub selection: Selection,
-    pub raw: PathBuf,
+    pub extracted: Extracted,
     pub tmp: PathBuf,
     pub output: PathBuf,
     pub movie_title: String,
@@ -266,14 +322,75 @@ async fn finish_inner(tx: &Tx, job: &FinishJob, cancel: CancellationToken) -> Re
     if let Some(dir) = job.output.parent() {
         tokio::fs::create_dir_all(dir).await?;
     }
-    let label = "Remux des pistes sélectionnées…";
-    emit(tx, AppEvent::RipProgress { label: label.into(), fraction: RIP_WEIGHT });
-    let out = remux::remux(&job.mkvmerge, &job.title, &job.selection, &job.raw, &job.output, &job.movie_title, tx, cancel, |f| {
-        emit(tx, AppEvent::RipProgress { label: label.into(), fraction: RIP_WEIGHT + f * (1.0 - RIP_WEIGHT) })
-    })
+    let raw = &job.extracted.raw;
+    let lang = &job.cfg.language;
+    let tracks = remux::identify(&job.mkvmerge, raw).await?;
+    let videos = tracks.iter().filter(|t| t.kind == "video").count();
+
+    // 1. Le fichier contient exactement la sélection : drapeaux posés en place.
+    if remux::matches_contents(&job.title, &job.selection, &tracks) && videos <= 1 {
+        emit(tx, AppEvent::RipProgress { label: "Finalisation : titre et drapeaux des pistes…".into(), fraction: RIP_WEIGHT });
+        match job.mkvmerge.sibling("mkvpropedit") {
+            Some(pe) => match remux::set_properties(&pe, &job.title, &job.selection, &tracks, raw, &job.movie_title, lang, tx).await {
+                Ok(()) => {
+                    move_file(tx, raw, &job.output).await?;
+                    log(tx, "Aucun remux nécessaire : fichier final obtenu sans réécriture.");
+                    emit(tx, AppEvent::RipProgress { label: "Terminé".into(), fraction: 1.0 });
+                    return Ok(job.output.clone());
+                }
+                Err(e) => log(tx, format!("⚠ {e:#} : repli sur un remux complet.")),
+            },
+            None => log(tx, "⚠ mkvpropedit introuvable : repli sur un remux complet."),
+        }
+    }
+
+    // 2. Pistes en trop (sélection modifiée, pistes indiscernables) : remux.
+    let need = std::fs::metadata(raw).map(|m| m.len()).unwrap_or(0);
+    if let Some(dir) = job.output.parent() {
+        if let Err(e) = check_space(dir, need) {
+            anyhow::bail!("remux impossible : {e}");
+        }
+    }
+    let label = "Remux des pistes sélectionnées";
+    emit(tx, AppEvent::RipProgress { label: format!("{label}…"), fraction: RIP_WEIGHT });
+    let rate = Mutex::new(Rate::new(need));
+    let out = remux::remux(
+        &job.mkvmerge,
+        &job.title,
+        &job.selection,
+        &job.extracted.contents,
+        raw,
+        &job.output,
+        &job.movie_title,
+        lang,
+        tx,
+        cancel,
+        |f| {
+            let label = match rate.lock().unwrap().update(f) {
+                Some(e) => format!("{label} · {}", progress::describe(&e)),
+                None => format!("{label}…"),
+            };
+            emit(tx, AppEvent::RipProgress { label, fraction: RIP_WEIGHT + f * (1.0 - RIP_WEIGHT) })
+        },
+    )
     .await?;
     emit(tx, AppEvent::RipProgress { label: "Terminé".into(), fraction: 1.0 });
     Ok(out)
+}
+
+/// Déplace `from` vers `to` : simple renommage sur le même disque, sinon copie.
+async fn move_file(tx: &Tx, from: &Path, to: &Path) -> Result<()> {
+    match tokio::fs::rename(from, to).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+            log(tx, format!("Copie vers {} (autre disque)…", to.display()));
+            emit(tx, AppEvent::RipProgress { label: "Copie vers la destination…".into(), fraction: RIP_WEIGHT });
+            tokio::fs::copy(from, to).await.with_context(|| format!("copie vers {}", to.display()))?;
+            let _ = tokio::fs::remove_file(from).await;
+            Ok(())
+        }
+        Err(e) => Err(e).with_context(|| format!("déplacement vers {}", to.display())),
+    }
 }
 
 /// Espace libre (octets) du système de fichiers qui contient `path` (ou son

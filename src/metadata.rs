@@ -256,6 +256,9 @@ pub struct Movie {
     pub overview: String,
     #[serde(default)]
     pub poster_path: Option<String>,
+    /// Durée en minutes (fiche détaillée uniquement, absente des recherches).
+    #[serde(default)]
+    pub runtime: Option<u32>,
 }
 
 impl Movie {
@@ -313,6 +316,24 @@ pub async fn tmdb_movie(http: &reqwest::Client, api_key: &str, id: u64, lang: &s
         .context("réponse TMDB illisible")
 }
 
+/// Vérifie qu'une clé est acceptée par TMDB.
+pub async fn tmdb_check(http: &reqwest::Client, api_key: &str) -> Result<()> {
+    let resp = tmdb_get(http, api_key.trim(), "/configuration").send().await.context("TMDB injoignable")?;
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        anyhow::bail!("clé refusée par TMDB");
+    }
+    resp.error_for_status().context("réponse inattendue de TMDB")?;
+    Ok(())
+}
+
+/// Ressemble à une clé TMDB : clé v3 (32 caractères hexadécimaux) ou jeton
+/// de lecture v4 (JWT « eyJ… »).
+pub fn looks_like_tmdb_key(s: &str) -> bool {
+    let s = s.trim();
+    (s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()))
+        || (s.starts_with("eyJ") && s.len() > 100 && s.split('.').count() == 3 && !s.contains(char::is_whitespace))
+}
+
 /// Identifiant TMDB saisi directement : « 4689 », « tmdbid-4689 » ou une URL
 /// `https://www.themoviedb.org/movie/4689-…`.
 pub fn parse_tmdb_id(input: &str) -> Option<u64> {
@@ -336,6 +357,15 @@ mod tests {
     use super::*;
     use crate::makemkv::disc::DiscInfo;
     use crate::makemkv::robot::parse_line;
+
+    #[test]
+    fn recognizes_tmdb_keys() {
+        assert!(looks_like_tmdb_key(" 0123456789abcdef0123456789ABCDEF\n"));
+        assert!(!looks_like_tmdb_key("0123456789abcdef"));
+        let jwt = format!("eyJhbGciOiJIUzI1NiJ9.{}.sig", "a".repeat(120));
+        assert!(looks_like_tmdb_key(&jwt));
+        assert!(!looks_like_tmdb_key("Bonjour tout le monde"));
+    }
 
     #[test]
     fn cleans_volume_names() {

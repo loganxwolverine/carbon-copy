@@ -6,6 +6,7 @@ mod movie_dialog;
 mod prefs;
 mod section;
 mod theme;
+mod tmdb_setup;
 mod widgets;
 
 use std::cell::RefCell;
@@ -17,10 +18,11 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use tokio_util::sync::CancellationToken;
 
-use crate::backend::{self, runtime, Extraction, FinishJob, RIP_WEIGHT};
+use crate::backend::{self, runtime, Extracted, Extraction, FinishJob, RIP_WEIGHT};
 use crate::config::Config;
 use crate::events::{AppEvent, Tx};
 use crate::makemkv::disc::{DiscInfo, StreamKind, Title};
+use crate::makemkv::rule;
 use crate::makemkv::robot::format_duration;
 use crate::metadata::{self, Movie};
 use crate::process::Tool;
@@ -35,10 +37,19 @@ struct ExtractionState {
     title: usize,
     cancel: CancellationToken,
     tmp: PathBuf,
-    /// `Some` une fois terminée : chemin du MKV brut ou erreur.
-    result: Option<Result<PathBuf, String>>,
+    /// Pistes audio / sous-titres que contiendra (ou contient) le fichier.
+    contents: Selection,
+    /// `Some` une fois terminée : fichier produit ou erreur.
+    result: Option<Result<Extracted, String>>,
     fraction: f64,
     label: String,
+}
+
+impl ExtractionState {
+    /// Le fichier en préparation contient-il toutes les pistes de `sel` ?
+    fn covers(&self, title: usize, sel: &Selection) -> bool {
+        self.title == title && sel.audio.is_subset(&self.contents.audio) && sel.subtitles.is_subset(&self.contents.subtitles)
+    }
 }
 
 #[derive(Default)]
@@ -66,6 +77,13 @@ struct State {
     poster_gen: u64,
     /// Empêche les callbacks de réagir pendant un remplissage programmatique.
     updating: bool,
+    /// Titre choisi à la main : la durée TMDB ne le remplace plus.
+    title_user_chosen: bool,
+    /// Analyse terminée, fiche TMDB attendue avant de lancer l'extraction
+    /// (sa durée peut changer le titre principal).
+    awaiting_metadata: bool,
+    /// Compteur de modifications de la sélection (anti-rebond).
+    selection_gen: u64,
 }
 
 pub struct App {
@@ -179,6 +197,7 @@ impl App {
             if me.state.borrow().updating {
                 return;
             }
+            me.state.borrow_mut().title_user_chosen = true;
             me.select_title(row.selected() as usize);
         });
 
@@ -314,6 +333,19 @@ impl App {
                 self.ui.eject_btn.set_sensitive(!crate::drive::optical_drives().is_empty());
                 // La sonde MakeMKV vient d'écrire l'identifiant SDF (date du firmware).
                 self.refresh_drive_info();
+                // Premier lancement sans clé TMDB : l'assistant est proposé une fois.
+                let prompt = {
+                    let mut s = self.state.borrow_mut();
+                    let p = s.cfg.tmdb_api_key.trim().is_empty() && !s.cfg.tmdb_prompted;
+                    if p {
+                        s.cfg.tmdb_prompted = true;
+                        let _ = s.cfg.save();
+                    }
+                    p
+                };
+                if prompt {
+                    self.open_tmdb_setup();
+                }
                 let first = self.state.borrow().loaded_drives.iter().next().cloned();
                 match first {
                     Some(d) => self.start_analysis(d),
@@ -348,18 +380,26 @@ impl App {
                     }
                 }
             }
-            AppEvent::Metadata { movie, title, year } => match movie {
-                Some(m) => {
-                    self.toast(&format!("Film identifié : {}", m.title));
-                    self.apply_movie(Some(m));
+            AppEvent::Metadata { movie, title, year } => {
+                match movie {
+                    Some(m) => {
+                        self.toast(&format!("Film identifié : {}", m.title));
+                        self.apply_movie(Some(m));
+                    }
+                    None => {
+                        self.apply_movie(None);
+                        self.ui.movie_entry.set_text(&title);
+                        self.ui.year_entry.set_text(&year.map(|y| y.to_string()).unwrap_or_default());
+                        self.update_movie_card();
+                    }
                 }
-                None => {
-                    self.apply_movie(None);
-                    self.ui.movie_entry.set_text(&title);
-                    self.ui.year_entry.set_text(&year.map(|y| y.to_string()).unwrap_or_default());
-                    self.update_movie_card();
+                // Le titre principal est maintenant fixé : l'extraction peut partir.
+                let was_waiting = std::mem::take(&mut self.state.borrow_mut().awaiting_metadata);
+                if was_waiting {
+                    let idx = self.state.borrow().title_index;
+                    self.prepare_extraction(idx);
                 }
-            },
+            }
             AppEvent::ExtractProgress { id, label, fraction } => self.on_extract_progress(id, label, fraction),
             AppEvent::Extracted { id, result } => self.on_extracted(id, result),
             AppEvent::RipProgress { label, fraction } => {
@@ -468,35 +508,14 @@ impl App {
         let main = info.main_title().unwrap_or(0);
         self.ui.type_row.set_subtitle(info.media_type().label());
         self.ui.name_row.set_subtitle(&info.name());
-
-        // Liste des titres (le titre principal est présélectionné).
-        let labels: Vec<String> = info
-            .titles
-            .iter()
-            .map(|t| {
-                let mut l = format!(
-                    "Titre {} — {} · {} chap. · {}",
-                    t.index,
-                    format_duration(t.duration_secs()),
-                    t.chapters(),
-                    t.size_label()
-                );
-                if t.index == main {
-                    l.push_str("  ★ principal");
-                }
-                l
-            })
-            .collect();
         {
             let mut s = self.state.borrow_mut();
-            s.updating = true;
             s.disc = Some(info);
+            s.title_user_chosen = false;
+            // Extraction différée jusqu'à la fiche TMDB (choix du titre).
+            s.awaiting_metadata = true;
         }
-        let n = self.ui.title_model.n_items();
-        let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-        self.ui.title_model.splice(0, n, &refs);
-        self.ui.title_combo.set_selected(main as u32);
-        self.state.borrow_mut().updating = false;
+        self.fill_title_list(main);
 
         // Fiche du film en attente du résultat TMDB.
         self.apply_movie(None);
@@ -512,6 +531,59 @@ impl App {
         self.ui.progress_bar.set_text(Some("Prêt"));
         self.ui.progress_label.set_text("");
         self.ui.stack.set_visible_child_name("disc");
+    }
+
+    /// Liste des titres, `main` marqué « principal » et sélectionné.
+    fn fill_title_list(&self, main: usize) {
+        let labels: Vec<String> = {
+            let s = self.state.borrow();
+            let Some(info) = s.disc.as_ref() else { return };
+            info.titles
+                .iter()
+                .map(|t| {
+                    let mut l = format!(
+                        "Titre {} — {} · {} chap. · {}",
+                        t.index,
+                        format_duration(t.duration_secs()),
+                        t.chapters(),
+                        t.size_label()
+                    );
+                    if t.index == main {
+                        l.push_str("  ★ principal");
+                    }
+                    l
+                })
+                .collect()
+        };
+        self.state.borrow_mut().updating = true;
+        let n = self.ui.title_model.n_items();
+        let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+        self.ui.title_model.splice(0, n, &refs);
+        self.ui.title_combo.set_selected(main as u32);
+        self.state.borrow_mut().updating = false;
+    }
+
+    /// Durée du film connue : choisit le titre qui lui correspond le mieux
+    /// (sauf si l'utilisateur a choisi lui-même).
+    fn refine_main_title(self: &Rc<Self>) {
+        let (best, current, minutes) = {
+            let s = self.state.borrow();
+            let Some(minutes) = s.movie.as_ref().and_then(|m| m.runtime).filter(|m| *m > 0) else { return };
+            if s.title_user_chosen || s.rip_cancel.is_some() {
+                return;
+            }
+            let Some(best) = s.disc.as_ref().and_then(|d| d.main_title_for(Some(minutes as u64 * 60))) else { return };
+            (best, s.title_index, minutes)
+        };
+        let label = crate::progress::short_duration(std::time::Duration::from_secs(minutes as u64 * 60));
+        append_log(&self.ui.log_view, &format!("Durée TMDB : {label} → titre principal : {best}"));
+        if best != current {
+            self.fill_title_list(best);
+            self.select_title(best);
+            self.toast(&format!("Titre principal ajusté d'après la durée du film ({label})"));
+        } else {
+            self.fill_title_list(best);
+        }
     }
 
     /// Change de titre : recalcule la sélection par défaut et reconstruit les listes.
@@ -581,8 +653,44 @@ impl App {
             drop(s);
             // Les pistes retenues changent les caractéristiques (MULTi, codec…).
             me.regenerate_filename();
+            me.on_selection_changed();
         });
         row
+    }
+
+    /// Pistes cochées / décochées : si l'extraction en préparation ne contient
+    /// plus tout ce qu'il faut (ou vient à peine de commencer), on la relance
+    /// avec la nouvelle sélection, après un court délai (clics successifs).
+    fn on_selection_changed(self: &Rc<Self>) {
+        let gen = {
+            let mut s = self.state.borrow_mut();
+            s.selection_gen += 1;
+            s.selection_gen
+        };
+        let me = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+            let restart = {
+                let s = me.state.borrow();
+                if s.selection_gen != gen || s.rip_cancel.is_some() {
+                    return;
+                }
+                let Some(title) = s.disc.as_ref().and_then(|d| d.titles.get(s.title_index)) else { return };
+                match s.extraction.as_ref() {
+                    Some(e) => {
+                        // Copie à peine commencée : on repart si le nouveau plan
+                        // évite un remux (fichier plus petit, fin instantanée).
+                        let early = e.result.is_none() && e.fraction < 0.25 && rule::plan(title, &s.selection).contents != e.contents;
+                        !e.covers(s.title_index, &s.selection) || early
+                    }
+                    None => false,
+                }
+            };
+            if restart {
+                append_log(&me.ui.log_view, "Sélection des pistes modifiée : la préparation repart avec les nouvelles pistes.");
+                let idx = me.state.borrow().title_index;
+                me.start_extraction(idx);
+            }
+        });
     }
 
     // ------------------------------------------------------------------
@@ -631,8 +739,12 @@ impl App {
             self.ui.tmdb_entry.set_text("");
         }
         self.update_movie_card();
+        let runtime_known = movie.as_ref().is_some_and(|m| m.runtime.is_some());
         self.load_poster(movie.and_then(|m| m.poster_path));
         self.regenerate_filename();
+        if runtime_known {
+            self.refine_main_title();
+        }
     }
 
     fn update_movie_card(&self) {
@@ -660,7 +772,11 @@ impl App {
                     "Identifiez le film pour obtenir l'affiche, le titre officiel et l'identifiant TMDB, \
                      ou saisissez le titre et l'année dans « Fichier de sortie ».",
                 );
-                self.ui.movie.change_btn.set_label("Identifier le film…");
+                self.ui.movie.change_btn.set_label(if s.cfg.tmdb_api_key.trim().is_empty() {
+                    "Activer la reconnaissance des films…"
+                } else {
+                    "Identifier le film…"
+                });
                 self.ui.movie.poster_stack.set_visible_child_name("placeholder");
             }
         }
@@ -699,20 +815,51 @@ impl App {
         });
     }
 
+    /// Assistant de clé TMDB ; une fois la clé enregistrée, le disque en
+    /// cours est identifié aussitôt.
+    fn open_tmdb_setup(self: &Rc<Self>) {
+        let current = self.state.borrow().cfg.tmdb_api_key.clone();
+        let me = self.clone();
+        tmdb_setup::show(&self.ui.window, &current, move |key| {
+            let (cfg, disc) = {
+                let mut s = me.state.borrow_mut();
+                s.cfg.tmdb_api_key = key.clone();
+                (s.cfg.clone(), if s.movie.is_none() && s.rip_cancel.is_none() { s.disc.clone() } else { None })
+            };
+            if let Err(e) = cfg.save() {
+                me.toast(&format!("Clé non enregistrée : {e}"));
+                return;
+            }
+            me.toast("Clé TMDB enregistrée");
+            me.update_movie_card();
+            if let Some(d) = disc {
+                me.ui.movie.heading.set_text("Recherche du film…");
+                runtime().spawn(backend::lookup_metadata(me.tx.clone(), cfg, d));
+            }
+        });
+    }
+
     fn open_movie_dialog(self: &Rc<Self>) {
+        if self.state.borrow().cfg.tmdb_api_key.trim().is_empty() {
+            self.open_tmdb_setup();
+            return;
+        }
         let cfg = self.state.borrow().cfg.clone();
         let query = self.ui.movie_entry.text().trim().to_string();
         let me = self.clone();
         movie_dialog::show(&self.ui.window, cfg, query, self.year(), move |m| {
             me.toast(&format!("Film choisi : {}", m.title));
+            let id = m.id;
             me.apply_movie(Some(m));
+            // La recherche ne donne pas la durée : fiche détaillée.
+            me.load_movie_by_id(id);
         });
     }
 
     fn load_movie_by_id(self: &Rc<Self>, id: u64) {
         let cfg = self.state.borrow().cfg.clone();
         if cfg.tmdb_api_key.trim().is_empty() {
-            self.toast("Ajoutez une clé API TMDB dans les préférences");
+            self.open_tmdb_setup();
             return;
         }
         let me = self.clone();
@@ -853,11 +1000,16 @@ impl App {
         // Extraction déjà prête, en cours, ou à lancer ?
         let state = {
             let s = self.state.borrow();
-            s.extraction.as_ref().filter(|e| e.title == title).map(|e| (e.result.clone(), e.fraction, e.label.clone()))
+            s.extraction.as_ref().filter(|e| e.covers(title, &s.selection)).map(|e| {
+                if e.contents != s.selection {
+                    append_log(&self.ui.log_view, "Pistes décochées depuis la préparation : un remux retirera les pistes en trop.");
+                }
+                (e.result.clone(), e.fraction, e.label.clone())
+            })
         };
         match state {
             Some((Some(Ok(_)), _, _)) => {
-                append_log(&self.ui.log_view, "Extraction déjà prête : passage direct au remux.");
+                append_log(&self.ui.log_view, "Extraction déjà prête : passage direct à la finalisation.");
                 self.launch_finish();
             }
             Some((None, fraction, label)) => {
@@ -888,8 +1040,8 @@ impl App {
             let s = self.state.borrow();
             (
                 s.cfg.prepare_in_background && s.makemkv.is_some() && s.disc.is_some(),
-                s.rip_cancel.is_some(),
-                s.extraction.as_ref().is_some_and(|e| e.title == title),
+                s.rip_cancel.is_some() || s.awaiting_metadata,
+                s.extraction.as_ref().is_some_and(|e| e.covers(title, &s.selection)),
             )
         };
         if enabled && !busy && !same {
@@ -918,7 +1070,10 @@ impl App {
         }
         let job = {
             let mut s = self.state.borrow_mut();
-            let (Some(makemkv), Some(device)) = (s.makemkv.clone(), s.device.clone()) else { return };
+            let (Some(makemkv), Some(mkvmerge), Some(device)) = (s.makemkv.clone(), s.mkvmerge.clone(), s.device.clone()) else { return };
+            let Some(title_info) = s.disc.as_ref().and_then(|d| d.titles.get(title)).cloned() else { return };
+            let selection = s.selection.clone();
+            let plan = rule::plan(&title_info, &selection);
             s.extract_seq += 1;
             let id = s.extract_seq;
             // Sur le même disque que la destination : pas de copie inter-disques.
@@ -929,12 +1084,23 @@ impl App {
                 title,
                 cancel: cancel.clone(),
                 tmp: tmp.clone(),
+                contents: plan.contents.clone(),
                 result: None,
                 fraction: 0.0,
                 label: "Démarrage de MakeMKV…".into(),
             });
-            (Extraction { id, makemkv, device, title, tmp, cfg: s.cfg.clone() }, cancel)
+            let exact = plan.is_exact(&selection);
+            let job = Extraction { id, makemkv, mkvmerge, device, title: title_info, selection, plan, tmp, cfg: s.cfg.clone() };
+            (job, cancel, exact)
         };
+        append_log(
+            &self.ui.log_view,
+            if job.2 {
+                "MakeMKV n'extrait que les pistes cochées : pas de remux à la fin."
+            } else {
+                "Certaines pistes cochées ne se distinguent pas par une règle MakeMKV : un remux retirera les pistes en trop."
+            },
+        );
         if self.state.borrow().rip_cancel.is_none() {
             self.ui.progress_bar.set_fraction(0.0);
             self.ui.progress_bar.set_text(Some("Préparation…"));
@@ -967,10 +1133,13 @@ impl App {
         }
     }
 
-    fn on_extracted(self: &Rc<Self>, id: u64, result: Result<PathBuf, String>) {
+    fn on_extracted(self: &Rc<Self>, id: u64, result: Result<Extracted, String>) {
         let ripping = {
             let mut s = self.state.borrow_mut();
             let Some(e) = s.extraction.as_mut().filter(|e| e.id == id) else { return };
+            if let Ok(x) = &result {
+                e.contents = x.contents.clone();
+            }
             e.result = Some(result.clone());
             s.pending_output.is_some()
         };
@@ -979,7 +1148,7 @@ impl App {
             (Ok(_), false) => {
                 self.ui.progress_bar.set_fraction(1.0);
                 self.ui.progress_bar.set_text(Some("Prêt"));
-                self.ui.progress_label.set_text("Extraction prête : le rip ne prendra que le tri des pistes.");
+                self.ui.progress_label.set_text("Extraction prête : le rip ne prendra que quelques secondes.");
                 self.toast("Disque copié : le rip sera quasi instantané");
             }
             (Err(e), true) => {
@@ -1004,7 +1173,7 @@ impl App {
             let mut s = self.state.borrow_mut();
             let Some(output) = s.pending_output.take() else { return };
             let Some(e) = s.extraction.take() else { return };
-            let Some(Ok(raw)) = e.result else { return };
+            let Some(Ok(extracted)) = e.result else { return };
             let (Some(mkvmerge), Some(device), Some(disc)) = (s.mkvmerge.clone(), s.device.clone(), s.disc.as_ref()) else { return };
             let Some(title) = disc.titles.get(e.title).cloned() else { return };
             let movie = self.ui.movie_entry.text().trim().to_string();
@@ -1013,7 +1182,7 @@ impl App {
                 device,
                 title,
                 selection: s.selection.clone(),
-                raw,
+                extracted,
                 tmp: e.tmp,
                 output,
                 movie_title: match self.year() {
@@ -1023,16 +1192,6 @@ impl App {
                 cfg: s.cfg.clone(),
             }
         };
-        // Le remux écrit un second fichier de taille comparable au MKV brut.
-        let need = std::fs::metadata(&job.raw).map(|m| m.len()).unwrap_or(0);
-        if let Some(dir) = job.output.parent() {
-            if let Err(e) = backend::check_space(dir, need) {
-                let tmp = job.tmp.clone();
-                runtime().spawn_blocking(move || std::fs::remove_dir_all(tmp));
-                self.on_rip_finished(Err(format!("Remux impossible : {e}.")));
-                return;
-            }
-        }
         let cancel = self.state.borrow().rip_cancel.clone().unwrap_or_default();
         runtime().spawn(backend::finish(self.tx.clone(), job, cancel));
     }
