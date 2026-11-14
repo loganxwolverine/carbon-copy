@@ -113,14 +113,16 @@ where
 
     let readers = async {
         tokio::join!(pump(stdout, |l| on_line(Stream::Stdout, l)), pump(stderr, |l| on_line(Stream::Stderr, l)));
-        child.wait().await
     };
 
     let token = cancel.unwrap_or_default();
     tokio::select! {
-        status = readers => Ok(status?),
+        _ = readers => Ok(child.wait().await?),
         _ = token.cancelled() => {
-            // Le `child` est détruit à la sortie de `readers` → kill_on_drop.
+            // On attend la fin réelle du processus : relancé aussitôt (sélection
+            // modifiée), un nouveau makemkvcon trouverait sinon le lecteur occupé.
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await;
             anyhow::bail!("opération annulée")
         }
     }

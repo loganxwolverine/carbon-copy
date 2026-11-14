@@ -32,11 +32,14 @@ struct Cond {
     lang: Option<String>,
     forced: bool,
     core: bool,
+    /// `Some(true)` : `lossless` (DTS-HD MA, TrueHD, PCM, FLAC) ;
+    /// `Some(false)` : `lossy`.
+    lossless: Option<bool>,
 }
 
 impl Cond {
     fn group(kind: StreamKind, lang: &Option<String>) -> Self {
-        Self { kind, lang: lang.clone(), forced: false, core: false }
+        Self { kind, lang: lang.clone(), forced: false, core: false, lossless: None }
     }
 
     fn render(&self) -> String {
@@ -53,6 +56,11 @@ impl Cond {
         if self.core {
             parts.push("core".into());
         }
+        match self.lossless {
+            Some(true) => parts.push("lossless".into()),
+            Some(false) => parts.push("lossy".into()),
+            None => {}
+        }
         format!("({})", parts.join("&"))
     }
 
@@ -61,6 +69,7 @@ impl Cond {
             && lang_key(s) == self.lang
             && (!self.forced || is_forced_flag(s))
             && (!self.core || is_core_flag(s))
+            && self.lossless.is_none_or(|l| is_lossless(s) == l)
     }
 }
 
@@ -77,6 +86,17 @@ fn is_forced_flag(s: &Stream) -> bool {
 
 fn is_core_flag(s: &Stream) -> bool {
     s.flags() & stream_flags::CORE_AUDIO != 0
+}
+
+/// Audio sans perte au sens de MakeMKV (les cœurs DTS / AC-3 extraits d'une
+/// piste HD sont, eux, avec perte).
+fn is_lossless(s: &Stream) -> bool {
+    if s.kind() != StreamKind::Audio || is_core_flag(s) {
+        return false;
+    }
+    let id = s.codec_id();
+    let short = s.get(attr::CODEC_SHORT).to_uppercase();
+    id.starts_with("A_TRUEHD") || id.starts_with("A_PCM") || id.starts_with("A_FLAC") || id.starts_with("A_MLP") || (id.starts_with("A_DTS") && short.contains("MA"))
 }
 
 fn is_mvc(s: &Stream) -> bool {
@@ -135,18 +155,35 @@ pub fn plan(title: &Title, sel: &Selection) -> Plan {
                 tokens.push((true, base));
                 continue;
             }
-            // Sous-ensemble distinguable par un attribut (forcé / cœur audio) ?
-            let (flag, refine): (fn(&Stream) -> bool, Cond) = match kind {
-                StreamKind::Subtitle => (is_forced_flag, Cond { forced: true, ..base.clone() }),
-                _ => (is_core_flag, Cond { core: true, ..base.clone() }),
+            // Sous-ensemble distinguable par un attribut (forcé, cœur audio,
+            // sans perte / avec perte) ? On essaie chaque attribut, en positif
+            // (« seulement ceux-là ») puis en négatif (« tous sauf ceux-là »).
+            let refinements: Vec<(fn(&Stream) -> bool, Cond)> = match kind {
+                StreamKind::Subtitle => vec![(is_forced_flag, Cond { forced: true, ..base.clone() })],
+                _ => vec![
+                    (is_core_flag, Cond { core: true, ..base.clone() }),
+                    (is_lossless, Cond { lossless: Some(true), ..base.clone() }),
+                    (|s: &Stream| !is_lossless(s), Cond { lossless: Some(false), ..base.clone() }),
+                ],
             };
-            let flagged: BTreeSet<usize> = group.iter().filter(|s| flag(s)).map(|s| s.index).collect();
-            if !flagged.is_empty() && picked == flagged {
-                tokens.push((true, refine));
-            } else if !flagged.is_empty() && picked == &all - &flagged {
-                tokens.push((true, base));
-                tokens.push((false, refine));
-            } else {
+            let mut done = false;
+            for (flag, refine) in refinements {
+                let flagged: BTreeSet<usize> = group.iter().filter(|s| flag(s)).map(|s| s.index).collect();
+                if flagged.is_empty() || flagged == all {
+                    continue;
+                }
+                if picked == flagged {
+                    tokens.push((true, refine));
+                } else if picked == &all - &flagged {
+                    tokens.push((true, base.clone()));
+                    tokens.push((false, refine));
+                } else {
+                    continue;
+                }
+                done = true;
+                break;
+            }
+            if !done {
                 // Indiscernable par une règle : groupe entier, tri par mkvmerge.
                 tokens.push((true, base));
             }
@@ -235,6 +272,39 @@ SINFO:0,6,3,0,"eng""#;
         let p = plan(&t, &want);
         assert_eq!(p.contents, sel(&[1, 3], &[]));
         assert!(!p.is_exact(&want));
+    }
+
+    /// Cas réel (Blu-ray) : anglais DTS-HD MA + cœur DTS + AC-3. Seule la
+    /// piste HD est voulue : `lossless` la désigne sans remux.
+    #[test]
+    fn lossless_isolates_the_hd_track() {
+        let t = title(
+            r#"SINFO:0,0,5,0,"V_MPEG4/ISO/AVC"
+SINFO:0,1,5,0,"A_DTS"
+SINFO:0,1,6,0,"DTS-HD MA"
+SINFO:0,1,3,0,"eng"
+SINFO:0,2,5,0,"A_DTS"
+SINFO:0,2,6,0,"DTS"
+SINFO:0,2,3,0,"eng"
+SINFO:0,2,22,0,"256"
+SINFO:0,3,5,0,"A_AC3"
+SINFO:0,3,3,0,"eng"
+SINFO:0,4,5,0,"A_DTS"
+SINFO:0,4,6,0,"DTS"
+SINFO:0,4,3,0,"fre""#,
+        );
+        let want = sel(&[1, 4], &[]);
+        let p = plan(&t, &want);
+        assert!(p.rule.ends_with("+sel:(audio&eng&lossless),+sel:(audio&fre)"), "{}", p.rule);
+        assert!(p.is_exact(&want));
+        // Tout l'anglais sauf la piste HD.
+        let want = sel(&[2, 3], &[]);
+        let p = plan(&t, &want);
+        assert!(p.rule.ends_with("+sel:(audio&eng),-sel:(audio&eng&lossless)"), "{}", p.rule);
+        assert!(p.is_exact(&want));
+        // Le cœur seul reste désigné par `core`.
+        let p = plan(&t, &sel(&[2], &[]));
+        assert!(p.rule.ends_with("+sel:(audio&eng&core)"), "{}", p.rule);
     }
 
     #[test]

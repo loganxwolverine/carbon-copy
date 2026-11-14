@@ -41,7 +41,7 @@ pub struct Stream {
 }
 
 impl Stream {
-    fn get(&self, id: u32) -> &str {
+    pub fn get(&self, id: u32) -> &str {
         self.attrs.get(&id).map(String::as_str).unwrap_or("")
     }
 

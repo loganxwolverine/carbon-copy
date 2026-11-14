@@ -37,6 +37,11 @@ pub struct ProbeResult {
     pub key_problem: Option<String>,
 }
 
+/// Message MakeMKV « Échec de l'ouverture du disque ».
+const MSG_OPEN_FAILED: u32 = 5010;
+/// Tentatives d'ouverture du disque avant d'abandonner l'extraction.
+const OPEN_ATTEMPTS: u32 = 3;
+
 /// Erreur typée : MakeMKV reste figé pendant le balayage des lecteurs.
 #[derive(Debug)]
 pub struct DriveScanStalled(pub String);
@@ -254,20 +259,43 @@ pub async fn rip(
     ];
     let label = Mutex::new(String::from("Extraction"));
     let last = Mutex::new(-1.0f64);
-    let status = run_robot(tool, &args, &[out_dir], tx, Some(cancel), |l| match l {
-        RobotLine::ProgressTitle { name } => *label.lock().unwrap() = name.clone(),
-        RobotLine::ProgressValue { total, max, .. } if *max > 0 => {
-            let f = *total as f64 / *max as f64;
-            // Limitation du débit d'événements : un toutes les 0,1 %.
-            let mut last = last.lock().unwrap();
-            if (f - *last).abs() >= 0.001 {
-                *last = f;
-                on_progress(label.lock().unwrap().clone(), f);
+    let mut attempt = 0;
+    let status = loop {
+        attempt += 1;
+        let open_failed = AtomicBool::new(false);
+        let status = run_robot(tool, &args, &[out_dir], tx, Some(cancel.clone()), |l| match l {
+            RobotLine::Msg { code: MSG_OPEN_FAILED, .. } => open_failed.store(true, Ordering::Relaxed),
+            RobotLine::ProgressTitle { name } => *label.lock().unwrap() = name.clone(),
+            RobotLine::ProgressValue { total, max, .. } if *max > 0 => {
+                let f = *total as f64 / *max as f64;
+                // Limitation du débit d'événements : un toutes les 0,1 %.
+                let mut last = last.lock().unwrap();
+                if (f - *last).abs() >= 0.001 {
+                    *last = f;
+                    on_progress(label.lock().unwrap().clone(), f);
+                }
             }
+            _ => {}
+        })
+        .await?;
+        if !open_failed.load(Ordering::Relaxed) {
+            break status;
         }
-        _ => {}
-    })
-    .await?;
+        // Le disque ne s'ouvre pas : soit le MakeMKV précédent (sélection
+        // modifiée) libère encore le lecteur, soit le lecteur ne répond plus.
+        if attempt >= OPEN_ATTEMPTS {
+            emit(tx, AppEvent::Toast("Le lecteur ne répond plus : éjectez puis réinsérez le disque".into()));
+            bail!(
+                "le lecteur ne répond plus (MakeMKV : « Échec de l'ouverture du disque »). \
+                 Éjectez puis réinsérez le disque ; si cela persiste, débranchez et rebranchez le lecteur"
+            );
+        }
+        log(tx, format!("Le disque ne s'ouvre pas (tentative {attempt}/{OPEN_ATTEMPTS}) : nouvel essai dans 4 s…"));
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(4)) => {}
+            _ = cancel.cancelled() => bail!("opération annulée"),
+        }
+    };
 
     // On retient le plus gros .mkv produit.
     let produced = std::fs::read_dir(out_dir)?

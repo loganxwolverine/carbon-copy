@@ -44,6 +44,9 @@ struct ExtractionState {
     tmp: PathBuf,
     /// Pistes audio / sous-titres que contiendra (ou contient) le fichier.
     contents: Selection,
+    /// Pistes vides sur le disque (absentes du fichier) : inutile de relancer
+    /// l'extraction pour elles.
+    dropped: Selection,
     /// `Some` une fois terminée : fichier produit ou erreur.
     result: Option<Result<Extracted, String>>,
     fraction: f64,
@@ -53,7 +56,10 @@ struct ExtractionState {
 impl ExtractionState {
     /// Le fichier en préparation contient-il toutes les pistes de `sel` ?
     fn covers(&self, title: usize, sel: &Selection) -> bool {
-        self.title == title && sel.audio.is_subset(&self.contents.audio) && sel.subtitles.is_subset(&self.contents.subtitles)
+        let has = |i: &usize, c: &BTreeSet<usize>, d: &BTreeSet<usize>| c.contains(i) || d.contains(i);
+        self.title == title
+            && sel.audio.iter().all(|i| has(i, &self.contents.audio, &self.dropped.audio))
+            && sel.subtitles.iter().all(|i| has(i, &self.contents.subtitles, &self.dropped.subtitles))
     }
 }
 
@@ -820,8 +826,18 @@ impl App {
             s.selection_gen += 1;
             s.selection_gen
         };
+        // Sur Blu-ray, chaque relance refait le traitement AACS / BD+ (jusqu'à
+        // 1 min 30) : on laisse plus de temps pour finir de cocher.
+        let bluray = {
+            let s = self.state.borrow();
+            s.disc
+                .as_ref()
+                .and_then(|d| d.titles.get(s.title_index))
+                .is_some_and(|t| t.streams_of(StreamKind::Video).any(|v| !v.codec_id().starts_with("V_MPEG2")))
+        };
+        let delay = if bluray { 5000 } else { 1500 };
         let me = self.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+        glib::timeout_add_local_once(std::time::Duration::from_millis(delay), move || {
             let restart = {
                 let s = me.state.borrow();
                 if s.selection_gen != gen || s.rip_cancel.is_some() {
@@ -1321,6 +1337,7 @@ impl App {
                 cancel: cancel.clone(),
                 tmp: tmp.clone(),
                 contents: plan.contents.clone(),
+                dropped: Selection::default(),
                 result: None,
                 fraction: 0.0,
                 label: "Démarrage de MakeMKV…".into(),
@@ -1376,6 +1393,7 @@ impl App {
             let Some(e) = s.extraction.as_mut().filter(|e| e.id == id) else { return };
             if let Ok(x) = &result {
                 e.contents = x.contents.clone();
+                e.dropped = x.dropped.clone();
             }
             e.result = Some(result.clone());
             s.pending_output.is_some()

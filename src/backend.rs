@@ -17,7 +17,7 @@ use crate::beta_key::{self, KeyUpdate};
 use crate::config::{Config, APP_DIR};
 use crate::events::{emit, log, status, AppEvent, Phase, Tx};
 use crate::makemkv::cli::{self, KeyProblem};
-use crate::makemkv::disc::{DiscInfo, StreamKind, Title};
+use crate::makemkv::disc::{DiscInfo, Title};
 use crate::makemkv::rule::Plan;
 use crate::makemkv::{install, settings};
 use crate::metadata;
@@ -226,6 +226,8 @@ pub struct Extracted {
     pub raw: PathBuf,
     /// Pistes audio / sous-titres présentes dans le fichier.
     pub contents: Selection,
+    /// Pistes choisies mais absentes (vides sur le disque) : ignorées.
+    pub dropped: Selection,
 }
 
 pub async fn extract(tx: Tx, job: Extraction, cancel: CancellationToken) {
@@ -247,25 +249,39 @@ async fn extract_inner(tx: &Tx, job: &Extraction, cancel: CancellationToken) -> 
             Ok(t) => t,
             Err(e) => {
                 log(tx, format!("⚠ Vérification des pistes impossible ({e:#}) : le rip retriera les pistes."));
-                return Ok(Extracted { raw, contents: plan.contents });
+                return Ok(Extracted { raw, contents: plan.contents, dropped: Selection::default() });
             }
         };
         if remux::matches_contents(&job.title, &plan.contents, &tracks) {
             log(tx, "Pistes extraites conformes à la sélection.");
-            return Ok(Extracted { raw, contents: plan.contents });
+            return Ok(Extracted { raw, contents: plan.contents, dropped: Selection::default() });
         }
-        // Inattendu : toutes les pistes voulues sont-elles au moins présentes ?
-        let all_found = [(StreamKind::Audio, &job.selection.audio), (StreamKind::Subtitle, &job.selection.subtitles)]
-            .into_iter()
-            .all(|(k, want)| {
-                let want: Vec<usize> = want.iter().copied().collect();
-                remux::map_tracks(&job.title, &plan.contents, &tracks, k, &want).len() == want.len()
-            });
-        if all_found || plan.rule == settings::SELECT_ALL {
+        // Inattendu : quelles pistes voulues manquent ?
+        let lost = remux::missing(&job.title, &plan.contents, &tracks, &job.selection);
+        let found: Vec<String> = tracks.iter().map(|t| format!("{}:{}", t.kind, t.properties.language.as_deref().unwrap_or("und"))).collect();
+        log(tx, format!("Pistes trouvées dans le fichier : {}", found.join(", ")));
+        if lost.audio.is_empty() && lost.subtitles.is_empty() {
             log(tx, "⚠ Pistes extraites différentes du plan : elles seront triées par mkvmerge.");
-            return Ok(Extracted { raw, contents: plan.contents });
+            return Ok(Extracted { raw, contents: plan.contents, dropped: Selection::default() });
         }
-        log(tx, format!("⚠ MakeMKV n'a pas appliqué la règle « {} » comme prévu : nouvelle extraction de toutes les pistes.", plan.rule));
+        // Seuls des sous-titres manquent, ou tout a déjà été extrait : ré-extraire
+        // ne servirait à rien (MakeMKV n'écrit pas les pistes vides, comme les
+        // sous-titres « forcés » d'un disque qui n'en contient pas).
+        if lost.audio.is_empty() || plan.rule == settings::SELECT_ALL {
+            let what = remux::describe(&job.title, &lost);
+            log(tx, format!("⚠ Pistes absentes du disque ou vides : {what}. Le film sera copié sans elles."));
+            emit(tx, AppEvent::Toast(format!("Pistes vides sur ce disque, ignorées : {what}")));
+            let contents = Selection { audio: &plan.contents.audio - &lost.audio, subtitles: &plan.contents.subtitles - &lost.subtitles };
+            return Ok(Extracted { raw, contents, dropped: lost });
+        }
+        log(
+            tx,
+            format!(
+                "⚠ MakeMKV n'a pas appliqué la règle « {} » comme prévu (manquent : {}) : nouvelle extraction de toutes les pistes.",
+                plan.rule,
+                remux::describe(&job.title, &lost)
+            ),
+        );
         let _ = tokio::fs::remove_file(&raw).await;
         plan = Plan::all(&job.title);
     }
@@ -323,14 +339,17 @@ async fn finish_inner(tx: &Tx, job: &FinishJob, cancel: CancellationToken) -> Re
     }
     let raw = &job.extracted.raw;
     let lang = &job.cfg.language;
+    let dropped = &job.extracted.dropped;
+    let selection = Selection { audio: &job.selection.audio - &dropped.audio, subtitles: &job.selection.subtitles - &dropped.subtitles };
+    let selection = &selection;
     let tracks = remux::identify(&job.mkvmerge, raw).await?;
     let videos = tracks.iter().filter(|t| t.kind == "video").count();
 
     // 1. Le fichier contient exactement la sélection : drapeaux posés en place.
-    if remux::matches_contents(&job.title, &job.selection, &tracks) && videos <= 1 {
+    if remux::matches_contents(&job.title, selection, &tracks) && videos <= 1 {
         emit(tx, AppEvent::RipProgress { phase: Phase::Finalize, label: "Finalisation : titre et drapeaux des pistes…".into(), fraction: RIP_WEIGHT, estimate: None });
         match job.mkvmerge.sibling("mkvpropedit") {
-            Some(pe) => match remux::set_properties(&pe, &job.title, &job.selection, &tracks, raw, &job.movie_title, lang, tx).await {
+            Some(pe) => match remux::set_properties(&pe, &job.title, selection, &tracks, raw, &job.movie_title, lang, tx).await {
                 Ok(()) => {
                     move_file(tx, raw, &job.output).await?;
                     log(tx, "Aucun remux nécessaire : fichier final obtenu sans réécriture.");
@@ -356,7 +375,7 @@ async fn finish_inner(tx: &Tx, job: &FinishJob, cancel: CancellationToken) -> Re
     let out = remux::remux(
         &job.mkvmerge,
         &job.title,
-        &job.selection,
+        selection,
         &job.extracted.contents,
         raw,
         &job.output,

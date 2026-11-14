@@ -43,6 +43,9 @@ pub struct TrackProps {
     /// Numéro de piste Matroska (sélecteur `track:@N` de mkvpropedit).
     #[serde(default)]
     pub number: Option<u64>,
+    /// Nombre d'images / de sous-titres (statistiques écrites par MakeMKV).
+    #[serde(default)]
+    pub tag_number_of_frames: Option<String>,
 }
 
 impl MkvTrack {
@@ -57,6 +60,24 @@ impl MkvTrack {
     fn lang(&self) -> String {
         normalize_lang(self.properties.language.as_deref().unwrap_or("und"))
     }
+    fn frames(&self) -> Option<u64> {
+        self.properties.tag_number_of_frames.as_deref()?.trim().parse().ok()
+    }
+}
+
+/// La piste de sous-titres `t` est-elle (vraisemblablement) une piste forcée ?
+///
+/// MakeMKV n'écrit pas le drapeau `forced` dans le MKV. Une piste forcée se
+/// reconnaît alors à son faible nombre de sous-titres comparé aux autres
+/// pistes de la même langue (ex. 50 contre 1 486 sur un UHD).
+fn looks_forced(t: &MkvTrack, same_lang: &[&MkvTrack]) -> bool {
+    if t.properties.forced_track == Some(true) {
+        return true;
+    }
+    let (Some(n), Some(max)) = (t.frames(), same_lang.iter().filter_map(|o| o.frames()).max()) else {
+        return false;
+    };
+    same_lang.len() > 1 && n * 5 < max
 }
 
 pub async fn identify(mkvmerge: &Tool, file: &Path) -> Result<Vec<MkvTrack>> {
@@ -131,10 +152,9 @@ pub fn map_tracks<'a>(
     let mut used = std::collections::HashSet::new();
     for s in title.streams_of(kind).filter(|s| wanted.contains(&s.index)) {
         let forced = s.is_forced();
-        let found = file.iter().find(|t| {
-            !used.contains(&t.id)
-                && t.lang() == s.lang()
-                && (kind != StreamKind::Subtitle || t.properties.forced_track.unwrap_or(false) == forced)
+        let same_lang: Vec<&MkvTrack> = file.iter().copied().filter(|t| t.lang() == s.lang()).collect();
+        let found = same_lang.iter().find(|t| {
+            !used.contains(&t.id) && (kind != StreamKind::Subtitle || looks_forced(t, &same_lang) == forced)
         });
         if let Some(t) = found {
             used.insert(t.id);
@@ -142,6 +162,34 @@ pub fn map_tracks<'a>(
         }
     }
     out
+}
+
+/// Pistes de `sel` introuvables dans le fichier extrait.
+pub fn missing(title: &Title, contents: &Selection, mkv: &[MkvTrack], sel: &Selection) -> Selection {
+    let lost = |kind, want: &BTreeSet<usize>| -> BTreeSet<usize> {
+        let w: Vec<usize> = want.iter().copied().collect();
+        let found: BTreeSet<usize> = map_tracks(title, contents, mkv, kind, &w).into_iter().map(|(i, _)| i).collect();
+        want - &found
+    };
+    Selection { audio: lost(StreamKind::Audio, &sel.audio), subtitles: lost(StreamKind::Subtitle, &sel.subtitles) }
+}
+
+/// Description lisible de pistes du disque (« fra DTS-HD MA, fra (forcés) »).
+pub fn describe(title: &Title, sel: &Selection) -> String {
+    title
+        .streams
+        .iter()
+        .filter(|s| sel.audio.contains(&s.index) || sel.subtitles.contains(&s.index))
+        .map(|s| {
+            let what = if s.kind() == StreamKind::Subtitle {
+                if s.is_forced() { "sous-titres forcés".to_string() } else { "sous-titres".to_string() }
+            } else {
+                format!("audio {}", s.codec_id().trim_start_matches("A_"))
+            };
+            format!("{what} {}", s.lang())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Piste audio par défaut : la première dans la langue préférée (hors
@@ -330,7 +378,7 @@ mod tests {
         MkvTrack {
             id,
             kind: kind.into(),
-            properties: TrackProps { language: Some(lang.into()), forced_track: Some(forced), number: Some(id + 1) },
+            properties: TrackProps { language: Some(lang.into()), forced_track: Some(forced), number: Some(id + 1), tag_number_of_frames: None },
         }
     }
 
@@ -371,6 +419,44 @@ SINFO:0,4,22,0,"4096""#;
         // Plan non respecté : repli par langue + drapeau forcé.
         assert_eq!(ids(map_tracks(title, &all, &mkv2, StreamKind::Subtitle, &[4])), vec![(4, 2)]);
         assert_eq!(ids(map_tracks(title, &all, &mkv2, StreamKind::Audio, &[2])), vec![(2, 1)]);
+    }
+
+    /// Cas réel (UHD) : MakeMKV n'écrit pas le drapeau forcé ; les pistes
+    /// « forcées » virtuelles, vides, ne sont pas écrites. La piste forcée
+    /// se reconnaît à son petit nombre de sous-titres.
+    #[test]
+    fn forced_subtitle_found_by_frame_count() {
+        let raw = r#"SINFO:0,0,1,0,"Subtitles"
+SINFO:0,0,3,0,"fre"
+SINFO:0,1,1,0,"Subtitles"
+SINFO:0,1,3,0,"fre"
+SINFO:0,1,22,0,"6144"
+SINFO:0,2,1,0,"Subtitles"
+SINFO:0,2,3,0,"fre"
+SINFO:0,3,1,0,"Subtitles"
+SINFO:0,3,3,0,"fre"
+SINFO:0,4,1,0,"Subtitles"
+SINFO:0,4,3,0,"fre""#;
+        let lines: Vec<_> = raw.lines().map(parse_line).collect();
+        let d = DiscInfo::from_lines(&lines);
+        let title = &d.titles[0];
+        let sub = |id: u64, frames: &str| MkvTrack {
+            id,
+            kind: "subtitles".into(),
+            properties: TrackProps { language: Some("fre".into()), forced_track: Some(false), number: Some(id + 9), tag_number_of_frames: Some(frames.into()) },
+        };
+        // Fichier : complets (1486), forcés (50), SDH (3840) — la piste
+        // virtuelle n° 1 (vide) n'a pas été écrite.
+        let mkv = vec![sub(8, "1486"), sub(9, "50"), sub(10, "3840")];
+        let all = Selection { audio: Default::default(), subtitles: [0, 1, 2, 3, 4].into() };
+        assert!(!matches_contents(title, &all, &mkv));
+        let got = map_tracks(title, &all, &mkv, StreamKind::Subtitle, &[1]);
+        assert_eq!(got.into_iter().map(|(i, t)| (i, t.id)).collect::<Vec<_>>(), vec![(1, 9)]);
+        let want = Selection { audio: Default::default(), subtitles: [1].into() };
+        assert!(missing(title, &all, &mkv, &want).subtitles.is_empty());
+        // Sans aucune piste « petite », la piste forcée est bien déclarée absente.
+        let mkv2 = vec![sub(8, "1486"), sub(10, "3840")];
+        assert_eq!(missing(title, &all, &mkv2, &want).subtitles, [1].into());
     }
 
     #[test]
