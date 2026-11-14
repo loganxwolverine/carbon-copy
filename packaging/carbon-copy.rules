@@ -1,0 +1,4 @@
+# Carbon Copy : donne à l'utilisateur connecté l'accès au périphérique SCSI
+# générique (/dev/sg*) des lecteurs optiques, requis par MakeMKV pour les Blu-ray.
+# (/dev/sr* reçoit déjà ce droit de systemd.)
+SUBSYSTEM=="scsi_generic", SUBSYSTEMS=="scsi", ATTRS{type}=="5", TAG+="uaccess"

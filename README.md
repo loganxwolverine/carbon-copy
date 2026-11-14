@@ -35,6 +35,24 @@ le rip d'un DVD, d'un Blu-ray ou d'un Blu-ray UHD.
 
 ## Installation
 
+### Paquets prêts à installer
+
+La page [Releases](https://github.com/loganxwolverine/carbon-copy/releases/latest) propose un paquet par distribution. Téléchargez celui qui correspond à la vôtre, puis installez-le (double-clic dans la logithèque, ou en ligne de commande) :
+
+| Distribution | Fichier | Commande |
+|---|---|---|
+| Ubuntu 24.04+ (Linux Mint 22, Pop!_OS, elementary OS 8) | `…~ubuntu24.04_amd64.deb` | `sudo apt install ./carbon-copy_*~ubuntu24.04_amd64.deb` |
+| Debian 13+ | `…~debian13_amd64.deb` | `sudo apt install ./carbon-copy_*~debian13_amd64.deb` |
+| Fedora 44 | `….fc44.x86_64.rpm` | `sudo dnf install ./carbon-copy-*.fc44.x86_64.rpm` |
+| openSUSE Tumbleweed | `….suse.tw.x86_64.rpm` | `sudo zypper install --allow-unsigned-rpm ./carbon-copy-*.suse.tw.x86_64.rpm` |
+| Arch Linux (Manjaro, EndeavourOS) | `….pkg.tar.zst` | `sudo pacman -U ./carbon-copy-*.pkg.tar.zst` |
+
+Le paquet installe aussi ses dépendances (GTK 4, libadwaita, Flatpak, MKVToolNix), charge le module `sg` et donne à l'utilisateur connecté l'accès au lecteur. MakeMKV est installé depuis Flathub au premier lancement de l'application. Pour désinstaller : `sudo apt remove carbon-copy`, `sudo dnf remove carbon-copy`, etc.
+
+Les paquets sont construits automatiquement par GitHub Actions (`.github/workflows/packages.yml`) à chaque tag `v*`, avec `packaging/build.sh` dans un conteneur de chaque distribution. Le `PKGBUILD` d'Arch est aussi fourni dans `packaging/arch/`.
+
+### Script d'installation (toutes distributions, compile depuis les sources)
+
 Une seule commande installe tout (paquets système, Rust si besoin, l'application, MakeMKV, l'accès au lecteur) puis lance Carbon Copy. Votre mot de passe administrateur est demandé une seule fois.
 
 ```bash

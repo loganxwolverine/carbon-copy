@@ -1,0 +1,36 @@
+# Maintainer: Carbon Copy <https://github.com/loganxwolverine/carbon-copy>
+pkgname=carbon-copy
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Copie conforme de vos DVD et Blu-ray en MKV (interface GTK4 pour MakeMKV)"
+arch=('x86_64')
+url="https://github.com/loganxwolverine/carbon-copy"
+license=('GPL-3.0-or-later')
+depends=('gtk4' 'libadwaita' 'flatpak' 'mkvtoolnix-cli' 'hicolor-icon-theme' 'gcc-libs' 'glibc')
+makedepends=('cargo')
+options=('!debug')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo test --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  ./packaging/stage.sh "$pkgdir"
+}
