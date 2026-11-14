@@ -34,6 +34,10 @@ pub struct Config {
     pub min_length_secs: u32,
     /// Éjecter le disque à la fin du rip.
     pub eject_when_done: bool,
+    /// Lancer l'extraction du titre dès la fin de l'analyse (gain de temps).
+    pub prepare_in_background: bool,
+    /// Démarrer en plein écran (mémorisé à chaque bascule F11).
+    pub fullscreen: bool,
     /// Sources de la clé bêta, essayées dans l'ordre.
     pub beta_key_sources: Vec<String>,
 }
@@ -49,6 +53,8 @@ impl Default for Config {
             output_dir: videos,
             min_length_secs: 120,
             eject_when_done: false,
+            fullscreen: true,
+            prepare_in_background: true,
             beta_key_sources: vec![
                 // Source officielle : le fil du forum où l'auteur de MakeMKV publie la clé.
                 "https://forum.makemkv.com/forum/viewtopic.php?t=1053".into(),

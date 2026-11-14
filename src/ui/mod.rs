@@ -1,6 +1,11 @@
 //! Contrôleur de l'interface : relie les widgets, l'état et les tâches de fond.
 
+mod drive_panel;
+mod movie_card;
+mod movie_dialog;
 mod prefs;
+mod section;
+mod theme;
 mod widgets;
 
 use std::cell::RefCell;
@@ -12,20 +17,36 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use tokio_util::sync::CancellationToken;
 
-use crate::backend::{self, runtime, RipJob};
+use crate::backend::{self, runtime, Extraction, FinishJob, RIP_WEIGHT};
 use crate::config::Config;
 use crate::events::{AppEvent, Tx};
 use crate::makemkv::disc::{DiscInfo, StreamKind, Title};
 use crate::makemkv::robot::format_duration;
-use crate::metadata;
+use crate::metadata::{self, Movie};
 use crate::process::Tool;
 use crate::selection::{default_selection, Selection};
 
 pub use widgets::APP_NAME;
 use widgets::{append_log, Ui};
 
+/// Extraction MakeMKV en cours ou terminée (préparée en arrière-plan).
+struct ExtractionState {
+    id: u64,
+    title: usize,
+    cancel: CancellationToken,
+    tmp: PathBuf,
+    /// `Some` une fois terminée : chemin du MKV brut ou erreur.
+    result: Option<Result<PathBuf, String>>,
+    fraction: f64,
+    label: String,
+}
+
 #[derive(Default)]
 struct State {
+    extraction: Option<ExtractionState>,
+    extract_seq: u64,
+    /// Rip demandé : destination finale, en attente de la fin de l'extraction.
+    pending_output: Option<PathBuf>,
     cfg: Config,
     makemkv: Option<Tool>,
     mkvmerge: Option<Tool>,
@@ -39,6 +60,10 @@ struct State {
     rip_cancel: Option<CancellationToken>,
     inhibit_cookie: Option<u32>,
     output_dir: PathBuf,
+    /// Film identifié sur TMDB (None : saisie manuelle / non reconnu).
+    movie: Option<Movie>,
+    /// Compteur de chargement d'affiche (ignore les réponses périmées).
+    poster_gen: u64,
     /// Empêche les callbacks de réagir pendant un remplissage programmatique.
     updating: bool,
 }
@@ -77,7 +102,56 @@ pub fn build(app: &adw::Application) {
     // Surveillance du lecteur optique (dure toute la vie de l'application).
     runtime().spawn(crate::drive::watch(this.tx.clone(), CancellationToken::new()));
     this.start_setup();
+    if this.state.borrow().cfg.fullscreen {
+        this.ui.window.fullscreen();
+    } else {
+        this.ui.window.maximize();
+    }
     this.ui.window.present();
+    this.refresh_drive_info();
+    schedule_debug_screenshot(&this.ui.window);
+}
+
+/// Annule une extraction et supprime ses fichiers (en arrière-plan).
+fn discard(e: ExtractionState) {
+    e.cancel.cancel();
+    // Extraction encore en cours : c'est elle qui supprime son dossier en
+    // s'arrêtant. Sinon, on supprime le MKV brut devenu inutile.
+    if e.result.is_some() {
+        let tmp = e.tmp;
+        runtime().spawn_blocking(move || std::fs::remove_dir_all(tmp));
+    }
+}
+
+/// Aide au développement : `CARBON_COPY_SCREENSHOT=/chemin.png` enregistre une
+/// capture de la fenêtre toutes les `CARBON_COPY_SCREENSHOT_EVERY` secondes
+/// (10 par défaut), pour vérifier la mise en page sans accès à l'écran.
+fn schedule_debug_screenshot(window: &adw::ApplicationWindow) {
+    let Ok(path) = std::env::var("CARBON_COPY_SCREENSHOT") else { return };
+    let every = std::env::var("CARBON_COPY_SCREENSHOT_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(10);
+    let window = window.clone();
+    glib::timeout_add_seconds_local(every, move || {
+        let (w, h) = (window.width(), window.height());
+        let paintable = gtk::WidgetPaintable::new(Some(&window));
+        let snapshot = gtk::Snapshot::new();
+        paintable.snapshot(&snapshot, w as f64, h as f64);
+        let Some(node) = snapshot.to_node() else {
+            eprintln!("capture : fenêtre vide ({w}×{h}, visible : {})", window.is_mapped());
+            return glib::ControlFlow::Continue;
+        };
+        // Moteur de rendu dédié : indépendant de l'état de la fenêtre.
+        let renderer = gtk::gsk::CairoRenderer::new();
+        if let Err(e) = renderer.realize_for_display(&WidgetExt::display(&window)) {
+            eprintln!("capture : {e}");
+            return glib::ControlFlow::Continue;
+        }
+        let texture = renderer.render_texture(node, Some(&gtk::graphene::Rect::new(0.0, 0.0, w as f32, h as f32)));
+        renderer.unrealize();
+        if let Err(e) = texture.save_to_png(&path) {
+            eprintln!("capture : {e}");
+        }
+        glib::ControlFlow::Continue
+    });
 }
 
 impl App {
@@ -115,7 +189,28 @@ impl App {
         }
 
         let me = self.clone();
-        self.ui.tmdb_btn.connect_clicked(move |_| me.search_tmdb());
+        self.ui.tmdb_btn.connect_clicked(move |_| me.open_movie_dialog());
+        let me = self.clone();
+        self.ui.movie.change_btn.connect_clicked(move |_| me.open_movie_dialog());
+
+        // Identifiant TMDB : modifie le nom ; Entrée charge la fiche du film.
+        let me = self.clone();
+        self.ui.tmdb_entry.connect_changed(move |_| me.regenerate_filename());
+        let me = self.clone();
+        self.ui.tmdb_entry.connect_apply(move |e| match metadata::parse_tmdb_id(&e.text()) {
+            Some(id) => me.load_movie_by_id(id),
+            None => me.toast("Identifiant TMDB invalide"),
+        });
+        // Titre saisi à la main : la fiche suit tant qu'aucun film n'est identifié.
+        let me = self.clone();
+        self.ui.movie_entry.connect_changed(move |_| {
+            if me.state.borrow().movie.is_none() {
+                me.update_movie_card();
+            }
+        });
+
+        let me = self.clone();
+        self.ui.eject_btn.connect_clicked(move |_| me.eject());
 
         let me = self.clone();
         self.ui.folder_btn.connect_clicked(move |_| me.choose_folder());
@@ -132,9 +227,12 @@ impl App {
         let me = self.clone();
         self.ui.window.connect_close_request(move |_| {
             // Annule proprement un rip en cours (le garde restaure la config MakeMKV).
-            let s = me.state.borrow();
+            let mut s = me.state.borrow_mut();
             for c in [&s.rip_cancel, &s.analysis_cancel].into_iter().flatten() {
                 c.cancel();
+            }
+            if let Some(e) = s.extraction.take() {
+                discard(e);
             }
             glib::Propagation::Proceed
         });
@@ -160,6 +258,28 @@ impl App {
             d.present(Some(&me.ui.window));
         });
         self.app.add_action(&about);
+
+        let fs = gio::SimpleAction::new("fullscreen", None);
+        let me = self.clone();
+        fs.connect_activate(move |_, _| {
+            let w = &me.ui.window;
+            let full = !w.is_fullscreen();
+            if full {
+                w.fullscreen();
+            } else {
+                w.unfullscreen();
+                w.maximize();
+            }
+            // On retient le choix pour le prochain lancement.
+            let cfg = {
+                let mut s = me.state.borrow_mut();
+                s.cfg.fullscreen = full;
+                s.cfg.clone()
+            };
+            let _ = cfg.save();
+        });
+        self.app.add_action(&fs);
+        self.app.set_accels_for_action("app.fullscreen", &["F11"]);
 
         let quit = gio::SimpleAction::new("quit", None);
         let me = self.clone();
@@ -191,6 +311,9 @@ impl App {
                     s.mkvmerge = Some(mkvmerge);
                 }
                 self.ui.refresh_btn.set_sensitive(true);
+                self.ui.eject_btn.set_sensitive(!crate::drive::optical_drives().is_empty());
+                // La sonde MakeMKV vient d'écrire l'identifiant SDF (date du firmware).
+                self.refresh_drive_info();
                 let first = self.state.borrow().loaded_drives.iter().next().cloned();
                 match first {
                     Some(d) => self.start_analysis(d),
@@ -225,14 +348,20 @@ impl App {
                     }
                 }
             }
-            AppEvent::Metadata { title, year, source } => {
-                self.ui.movie_entry.set_text(&title);
-                self.ui.year_entry.set_text(&year.map(|y| y.to_string()).unwrap_or_default());
-                self.regenerate_filename();
-                if source == "TMDB" {
-                    self.toast(&format!("Film identifié : {title}"));
+            AppEvent::Metadata { movie, title, year } => match movie {
+                Some(m) => {
+                    self.toast(&format!("Film identifié : {}", m.title));
+                    self.apply_movie(Some(m));
                 }
-            }
+                None => {
+                    self.apply_movie(None);
+                    self.ui.movie_entry.set_text(&title);
+                    self.ui.year_entry.set_text(&year.map(|y| y.to_string()).unwrap_or_default());
+                    self.update_movie_card();
+                }
+            },
+            AppEvent::ExtractProgress { id, label, fraction } => self.on_extract_progress(id, label, fraction),
+            AppEvent::Extracted { id, result } => self.on_extracted(id, result),
             AppEvent::RipProgress { label, fraction } => {
                 self.ui.progress_bar.set_fraction(fraction.clamp(0.0, 1.0));
                 self.ui.progress_bar.set_text(Some(&format!("{:.1} %", fraction * 100.0)));
@@ -256,6 +385,24 @@ impl App {
         runtime().spawn(backend::startup(self.tx.clone(), cfg));
     }
 
+    /// Relit les informations du lecteur courant et met à jour les deux panneaux.
+    fn refresh_drive_info(self: &Rc<Self>) {
+        let dev = {
+            let s = self.state.borrow();
+            s.device.clone().or_else(|| s.loaded_drives.iter().next().cloned())
+        }
+        .or_else(|| crate::drive::optical_drives().into_iter().next());
+        let me = self.clone();
+        glib::spawn_future_local(async move {
+            let info = match dev {
+                Some(d) => runtime().spawn_blocking(move || crate::drive_info::gather(&d)).await.ok().flatten(),
+                None => None,
+            };
+            me.ui.nodisc_drive.update(info.as_ref());
+            me.ui.disc_drive.update(info.as_ref());
+        });
+    }
+
     fn on_drive_state(self: &Rc<Self>, device: String, has_disc: bool) {
         append_log(
             &self.ui.log_view,
@@ -270,6 +417,9 @@ impl App {
             }
             (s.makemkv.is_some(), s.rip_cancel.is_some(), s.device.clone())
         };
+        // udev met à jour le type de média inséré un peu après l'ioctl.
+        let me = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || me.refresh_drive_info());
         if !ready || ripping {
             return; // Pendant un rip, on ignore tout changement d'état.
         }
@@ -279,6 +429,7 @@ impl App {
             if let Some(c) = self.state.borrow_mut().analysis_cancel.take() {
                 c.cancel();
             }
+            self.discard_extraction();
             let mut s = self.state.borrow_mut();
             s.disc = None;
             s.device = None;
@@ -298,7 +449,9 @@ impl App {
                 c.cancel();
             }
             s.device = Some(device.clone());
-            (tool, s.cfg.clone())
+            drop(s);
+            self.discard_extraction();
+            (tool, self.state.borrow().cfg.clone())
         };
         let cancel = CancellationToken::new();
         self.state.borrow_mut().analysis_cancel = Some(cancel.clone());
@@ -345,6 +498,15 @@ impl App {
         self.ui.title_combo.set_selected(main as u32);
         self.state.borrow_mut().updating = false;
 
+        // Fiche du film en attente du résultat TMDB.
+        self.apply_movie(None);
+        self.ui.movie_entry.set_text("");
+        self.ui.year_entry.set_text("");
+        self.ui.movie.heading.set_text("Recherche du film…");
+        self.ui.movie.details.set_text("");
+        self.ui.movie.overview.set_text("");
+        self.ui.movie.poster_stack.set_visible_child_name("loading");
+
         self.select_title(main);
         self.ui.progress_bar.set_fraction(0.0);
         self.ui.progress_bar.set_text(Some("Prêt"));
@@ -367,6 +529,8 @@ impl App {
             if title.source().is_empty() { "—" } else { title.source() }
         ));
         self.rebuild_tracks(&title);
+        self.regenerate_filename();
+        self.prepare_extraction(index);
     }
 
     fn rebuild_tracks(self: &Rc<Self>, title: &Title) {
@@ -414,6 +578,9 @@ impl App {
             } else {
                 set.remove(&index);
             }
+            drop(s);
+            // Les pistes retenues changent les caractéristiques (MULTi, codec…).
+            me.regenerate_filename();
         });
         row
     }
@@ -426,26 +593,174 @@ impl App {
     }
 
     fn regenerate_filename(&self) {
-        let name = metadata::output_filename(self.ui.movie_entry.text().trim(), self.year());
+        let tags = {
+            let s = self.state.borrow();
+            match s.disc.as_ref().and_then(|d| d.titles.get(s.title_index).map(|t| (d, t))) {
+                Some((d, t)) => metadata::media_tags(d.media_type(), t, &s.selection, &s.cfg.language),
+                None => String::new(),
+            }
+        };
+        self.ui.tags_row.set_subtitle(if tags.is_empty() { "—" } else { &tags });
+        self.update_counts();
+        let tmdb_id = metadata::parse_tmdb_id(&self.ui.tmdb_entry.text());
+        let name = metadata::output_filename(self.ui.movie_entry.text().trim(), self.year(), tmdb_id, &tags);
         self.ui.filename_entry.set_text(&name);
     }
 
-    fn search_tmdb(self: &Rc<Self>) {
+    /// Compteurs « cochées / disponibles » dans l'en-tête des sections.
+    fn update_counts(&self) {
+        let s = self.state.borrow();
+        let Some(t) = s.disc.as_ref().and_then(|d| d.titles.get(s.title_index)) else { return };
+        let (na, ns) = (t.streams_of(StreamKind::Audio).count(), t.streams_of(StreamKind::Subtitle).count());
+        self.ui.audio_section.set_count(&format!("{} / {na}", s.selection.audio.len()));
+        self.ui.subs_section.set_count(&format!("{} / {ns}", s.selection.subtitles.len()));
+    }
+
+    // ------------------------------------------------------------------
+    // Film : fiche, affiche, identification manuelle
+    // ------------------------------------------------------------------
+
+    /// Applique un film TMDB (titre, année, identifiant, affiche) ou l'efface.
+    fn apply_movie(self: &Rc<Self>, movie: Option<Movie>) {
+        self.state.borrow_mut().movie = movie.clone();
+        if let Some(m) = &movie {
+            self.ui.movie_entry.set_text(&m.title);
+            self.ui.year_entry.set_text(&m.year().map(|y| y.to_string()).unwrap_or_default());
+            self.ui.tmdb_entry.set_text(&m.id.to_string());
+        } else {
+            self.ui.tmdb_entry.set_text("");
+        }
+        self.update_movie_card();
+        self.load_poster(movie.and_then(|m| m.poster_path));
+        self.regenerate_filename();
+    }
+
+    fn update_movie_card(&self) {
+        let s = self.state.borrow();
+        match &s.movie {
+            Some(m) => {
+                self.ui.movie.heading.set_text(&m.title);
+                let mut d = Vec::new();
+                if let Some(y) = m.year() {
+                    d.push(y.to_string());
+                }
+                if !m.original_title.is_empty() && m.original_title != m.title {
+                    d.push(format!("titre original : {}", m.original_title));
+                }
+                d.push(format!("TMDB {}", m.id));
+                self.ui.movie.details.set_text(&d.join(" · "));
+                self.ui.movie.overview.set_text(if m.overview.is_empty() { "Aucun résumé disponible." } else { &m.overview });
+                self.ui.movie.change_btn.set_label("Ce n'est pas le bon film ?");
+            }
+            None => {
+                let typed = self.ui.movie_entry.text();
+                self.ui.movie.heading.set_text(if typed.trim().is_empty() { "Film non reconnu" } else { typed.trim() });
+                self.ui.movie.details.set_text("Non identifié sur TMDB");
+                self.ui.movie.overview.set_text(
+                    "Identifiez le film pour obtenir l'affiche, le titre officiel et l'identifiant TMDB, \
+                     ou saisissez le titre et l'année dans « Fichier de sortie ».",
+                );
+                self.ui.movie.change_btn.set_label("Identifier le film…");
+                self.ui.movie.poster_stack.set_visible_child_name("placeholder");
+            }
+        }
+    }
+
+    fn load_poster(self: &Rc<Self>, poster_path: Option<String>) {
+        let gen = {
+            let mut s = self.state.borrow_mut();
+            s.poster_gen += 1;
+            s.poster_gen
+        };
+        let Some(path) = poster_path else {
+            self.ui.theme.reset();
+            self.ui.movie.poster_stack.set_visible_child_name("placeholder");
+            return;
+        };
+        self.ui.movie.poster_stack.set_visible_child_name("loading");
+        let me = self.clone();
+        glib::spawn_future_local(async move {
+            let res = runtime().spawn(async move { metadata::fetch_poster(backend::http(), &path, "w342").await }).await;
+            if me.state.borrow().poster_gen != gen {
+                return; // Un autre film a été choisi entre-temps.
+            }
+            match res.ok().and_then(|r| r.ok()).and_then(movie_dialog::texture) {
+                Some(t) => {
+                    // L'affiche donne sa couleur à toute la fenêtre.
+                    me.ui.theme.set_color(theme::dominant_color(&t));
+                    me.ui.movie.poster.set_paintable(Some(&t));
+                    me.ui.movie.poster_stack.set_visible_child_name("poster");
+                }
+                None => {
+                    me.ui.theme.reset();
+                    me.ui.movie.poster_stack.set_visible_child_name("placeholder");
+                }
+            }
+        });
+    }
+
+    fn open_movie_dialog(self: &Rc<Self>) {
+        let cfg = self.state.borrow().cfg.clone();
+        let query = self.ui.movie_entry.text().trim().to_string();
+        let me = self.clone();
+        movie_dialog::show(&self.ui.window, cfg, query, self.year(), move |m| {
+            me.toast(&format!("Film choisi : {}", m.title));
+            me.apply_movie(Some(m));
+        });
+    }
+
+    fn load_movie_by_id(self: &Rc<Self>, id: u64) {
         let cfg = self.state.borrow().cfg.clone();
         if cfg.tmdb_api_key.trim().is_empty() {
             self.toast("Ajoutez une clé API TMDB dans les préférences");
             return;
         }
-        let query = self.ui.movie_entry.text().to_string();
-        let year = self.year();
+        let me = self.clone();
+        glib::spawn_future_local(async move {
+            let res = runtime()
+                .spawn(async move { metadata::tmdb_movie(backend::http(), cfg.tmdb_api_key.trim(), id, &cfg.language).await })
+                .await;
+            match res {
+                Ok(Ok(m)) => me.apply_movie(Some(m)),
+                Ok(Err(e)) => me.toast(&format!("TMDB : {e:#}")),
+                Err(_) => {}
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Éjection
+    // ------------------------------------------------------------------
+    fn eject(self: &Rc<Self>) {
+        let device = {
+            let mut s = self.state.borrow_mut();
+            if s.rip_cancel.is_some() {
+                return;
+            }
+            // MakeMKV tient le lecteur pendant l'analyse : on l'arrête d'abord.
+            if let Some(c) = s.analysis_cancel.take() {
+                c.cancel();
+            }
+            if let Some(e) = s.extraction.take() {
+                discard(e);
+            }
+            s.device
+                .clone()
+                .or_else(|| s.loaded_drives.iter().next().cloned())
+                .or_else(|| crate::drive::optical_drives().into_iter().next())
+        };
+        let Some(device) = device else {
+            self.toast("Aucun lecteur optique");
+            return;
+        };
+        self.ui.eject_btn.set_sensitive(false);
         let tx = self.tx.clone();
-        runtime().spawn(async move {
-            match metadata::tmdb_search(backend::http(), cfg.tmdb_api_key.trim(), &query, year, &cfg.language).await {
-                Ok(Some((title, year))) => {
-                    crate::events::emit(&tx, AppEvent::Metadata { title, year, source: "TMDB".into() })
-                }
-                Ok(None) => crate::events::emit(&tx, AppEvent::Toast(format!("TMDB : aucun résultat pour « {query} »"))),
-                Err(e) => crate::events::emit(&tx, AppEvent::Toast(format!("TMDB : {e}"))),
+        let me = self.clone();
+        glib::spawn_future_local(async move {
+            let ok = runtime().spawn(async move { backend::eject(&tx, device).await }).await.unwrap_or(false);
+            me.ui.eject_btn.set_sensitive(me.state.borrow().rip_cancel.is_none());
+            if ok {
+                me.toast("Disque éjecté");
             }
         });
     }
@@ -458,7 +773,19 @@ impl App {
             if let Ok(folder) = dialog.select_folder_future(Some(&me.ui.window)).await {
                 if let Some(path) = folder.path() {
                     me.ui.folder_row.set_subtitle(&path.display().to_string());
-                    me.state.borrow_mut().output_dir = path;
+                    // Le dernier dossier choisi devient la destination par défaut.
+                    let cfg = {
+                        let mut s = me.state.borrow_mut();
+                        s.output_dir = path.clone();
+                        s.cfg.output_dir = path;
+                        s.cfg.clone()
+                    };
+                    if let Err(e) = cfg.save() {
+                        me.toast(&format!("Dossier non mémorisé : {e}"));
+                    }
+                    // Nouvelle destination : on y prépare l'extraction si rien n'est en cours.
+                    let idx = me.state.borrow().title_index;
+                    me.prepare_extraction(idx);
                 }
             }
         });
@@ -510,19 +837,184 @@ impl App {
     }
 
     fn start_rip(self: &Rc<Self>, output: PathBuf) {
-        let job = {
+        let cancel = CancellationToken::new();
+        // Empêche la mise en veille pendant le rip (qui peut durer une heure).
+        let cookie = self.app.inhibit(Some(&self.ui.window), gtk::ApplicationInhibitFlags::SUSPEND | gtk::ApplicationInhibitFlags::LOGOUT, Some("Rip en cours"));
+        let title = {
+            let mut s = self.state.borrow_mut();
+            s.rip_cancel = Some(cancel);
+            s.inhibit_cookie = Some(cookie);
+            s.pending_output = Some(output.clone());
+            s.title_index
+        };
+        self.set_ripping_ui(true);
+        append_log(&self.ui.log_view, &format!("▶ Rip vers {}", output.display()));
+
+        // Extraction déjà prête, en cours, ou à lancer ?
+        let state = {
             let s = self.state.borrow();
-            let (Some(makemkv), Some(mkvmerge), Some(device), Some(disc)) = (&s.makemkv, &s.mkvmerge, &s.device, &s.disc) else {
-                return;
-            };
-            let Some(title) = disc.titles.get(s.title_index).cloned() else { return };
+            s.extraction.as_ref().filter(|e| e.title == title).map(|e| (e.result.clone(), e.fraction, e.label.clone()))
+        };
+        match state {
+            Some((Some(Ok(_)), _, _)) => {
+                append_log(&self.ui.log_view, "Extraction déjà prête : passage direct au remux.");
+                self.launch_finish();
+            }
+            Some((None, fraction, label)) => {
+                append_log(&self.ui.log_view, "Extraction déjà en cours : le rip la reprend.");
+                self.show_rip_progress(&label, fraction * RIP_WEIGHT);
+            }
+            _ => {
+                self.show_rip_progress("Démarrage de MakeMKV…", 0.0);
+                self.start_extraction(title);
+            }
+        }
+    }
+
+    fn show_rip_progress(&self, label: &str, fraction: f64) {
+        self.ui.progress_bar.set_fraction(fraction.clamp(0.0, 1.0));
+        self.ui.progress_bar.set_text(Some(&format!("{:.1} %", fraction * 100.0)));
+        self.ui.progress_label.set_text(label);
+    }
+
+    // ------------------------------------------------------------------
+    // Extraction (éventuellement préparée en arrière-plan)
+    // ------------------------------------------------------------------
+
+    /// Après l'analyse ou un changement de titre : lance l'extraction du titre
+    /// en arrière-plan si l'option est active.
+    fn prepare_extraction(self: &Rc<Self>, title: usize) {
+        let (enabled, busy, same) = {
+            let s = self.state.borrow();
+            (
+                s.cfg.prepare_in_background && s.makemkv.is_some() && s.disc.is_some(),
+                s.rip_cancel.is_some(),
+                s.extraction.as_ref().is_some_and(|e| e.title == title),
+            )
+        };
+        if enabled && !busy && !same {
+            self.start_extraction(title);
+        }
+    }
+
+    fn start_extraction(self: &Rc<Self>, title: usize) {
+        self.discard_extraction();
+        // Jamais de copie sans la place nécessaire (un DVD fait 4 à 9 Go).
+        let (dir, need, ripping) = {
+            let s = self.state.borrow();
+            let need = s.disc.as_ref().and_then(|d| d.titles.get(title)).map(|t| t.size_bytes()).unwrap_or(0);
+            (s.output_dir.clone(), need, s.pending_output.is_some())
+        };
+        if let Err(e) = backend::check_space(&dir, need) {
+            append_log(&self.ui.log_view, &format!("⚠ Extraction non lancée : {e}"));
+            if ripping {
+                self.on_rip_finished(Err(format!("Rip impossible : {e}. Choisissez un autre dossier de destination.")));
+            } else {
+                self.ui.progress_bar.set_fraction(0.0);
+                self.ui.progress_bar.set_text(Some("Espace insuffisant"));
+                self.ui.progress_label.set_text(&format!("Préparation impossible : {e}. Choisissez un autre dossier de destination."));
+            }
+            return;
+        }
+        let job = {
+            let mut s = self.state.borrow_mut();
+            let (Some(makemkv), Some(device)) = (s.makemkv.clone(), s.device.clone()) else { return };
+            s.extract_seq += 1;
+            let id = s.extract_seq;
+            // Sur le même disque que la destination : pas de copie inter-disques.
+            let tmp = s.output_dir.join(format!(".carbon-copy-{}-{id}", std::process::id()));
+            let cancel = CancellationToken::new();
+            s.extraction = Some(ExtractionState {
+                id,
+                title,
+                cancel: cancel.clone(),
+                tmp: tmp.clone(),
+                result: None,
+                fraction: 0.0,
+                label: "Démarrage de MakeMKV…".into(),
+            });
+            (Extraction { id, makemkv, device, title, tmp, cfg: s.cfg.clone() }, cancel)
+        };
+        if self.state.borrow().rip_cancel.is_none() {
+            self.ui.progress_bar.set_fraction(0.0);
+            self.ui.progress_bar.set_text(Some("Préparation…"));
+            self.ui.progress_label.set_text(&format!("Préparation en arrière-plan du titre {title} : vous pouvez vérifier la fiche et les pistes."));
+        }
+        runtime().spawn(backend::extract(self.tx.clone(), job.0, job.1));
+    }
+
+    /// Abandonne l'extraction courante (annulation, suppression des fichiers).
+    fn discard_extraction(&self) {
+        if let Some(e) = self.state.borrow_mut().extraction.take() {
+            discard(e);
+        }
+    }
+
+    fn on_extract_progress(self: &Rc<Self>, id: u64, label: String, fraction: f64) {
+        let ripping = {
+            let mut s = self.state.borrow_mut();
+            let Some(e) = s.extraction.as_mut().filter(|e| e.id == id) else { return };
+            e.fraction = fraction;
+            e.label = label.clone();
+            s.pending_output.is_some()
+        };
+        if ripping {
+            self.show_rip_progress(&label, fraction * RIP_WEIGHT);
+        } else {
+            self.ui.progress_bar.set_fraction(fraction);
+            self.ui.progress_bar.set_text(Some(&format!("Préparation {:.0} %", fraction * 100.0)));
+            self.ui.progress_label.set_text(&format!("Préparation en arrière-plan — {label}"));
+        }
+    }
+
+    fn on_extracted(self: &Rc<Self>, id: u64, result: Result<PathBuf, String>) {
+        let ripping = {
+            let mut s = self.state.borrow_mut();
+            let Some(e) = s.extraction.as_mut().filter(|e| e.id == id) else { return };
+            e.result = Some(result.clone());
+            s.pending_output.is_some()
+        };
+        match (result, ripping) {
+            (Ok(_), true) => self.launch_finish(),
+            (Ok(_), false) => {
+                self.ui.progress_bar.set_fraction(1.0);
+                self.ui.progress_bar.set_text(Some("Prêt"));
+                self.ui.progress_label.set_text("Extraction prête : le rip ne prendra que le tri des pistes.");
+                self.toast("Disque copié : le rip sera quasi instantané");
+            }
+            (Err(e), true) => {
+                self.state.borrow_mut().extraction = None;
+                self.on_rip_finished(Err(e));
+            }
+            (Err(e), false) => {
+                self.state.borrow_mut().extraction = None;
+                self.ui.progress_bar.set_fraction(0.0);
+                self.ui.progress_bar.set_text(Some("Prêt"));
+                if !e.contains("annulée") {
+                    append_log(&self.ui.log_view, &format!("⚠ Préparation interrompue : {e}"));
+                    self.ui.progress_label.set_text("Préparation interrompue : le rip relancera l'extraction.");
+                }
+            }
+        }
+    }
+
+    /// Extraction terminée et rip demandé : remux vers la destination.
+    fn launch_finish(self: &Rc<Self>) {
+        let job = {
+            let mut s = self.state.borrow_mut();
+            let Some(output) = s.pending_output.take() else { return };
+            let Some(e) = s.extraction.take() else { return };
+            let Some(Ok(raw)) = e.result else { return };
+            let (Some(mkvmerge), Some(device), Some(disc)) = (s.mkvmerge.clone(), s.device.clone(), s.disc.as_ref()) else { return };
+            let Some(title) = disc.titles.get(e.title).cloned() else { return };
             let movie = self.ui.movie_entry.text().trim().to_string();
-            RipJob {
-                makemkv: makemkv.clone(),
-                mkvmerge: mkvmerge.clone(),
-                device: device.clone(),
+            FinishJob {
+                mkvmerge,
+                device,
                 title,
                 selection: s.selection.clone(),
+                raw,
+                tmp: e.tmp,
                 output,
                 movie_title: match self.year() {
                     Some(y) => format!("{movie} ({y})"),
@@ -531,25 +1023,31 @@ impl App {
                 cfg: s.cfg.clone(),
             }
         };
-        let cancel = CancellationToken::new();
-        // Empêche la mise en veille pendant le rip (qui peut durer une heure).
-        let cookie = self.app.inhibit(Some(&self.ui.window), gtk::ApplicationInhibitFlags::SUSPEND | gtk::ApplicationInhibitFlags::LOGOUT, Some("Rip en cours"));
-        {
-            let mut s = self.state.borrow_mut();
-            s.rip_cancel = Some(cancel.clone());
-            s.inhibit_cookie = Some(cookie);
+        // Le remux écrit un second fichier de taille comparable au MKV brut.
+        let need = std::fs::metadata(&job.raw).map(|m| m.len()).unwrap_or(0);
+        if let Some(dir) = job.output.parent() {
+            if let Err(e) = backend::check_space(dir, need) {
+                let tmp = job.tmp.clone();
+                runtime().spawn_blocking(move || std::fs::remove_dir_all(tmp));
+                self.on_rip_finished(Err(format!("Remux impossible : {e}.")));
+                return;
+            }
         }
-        self.set_ripping_ui(true);
-        append_log(&self.ui.log_view, &format!("▶ Rip vers {}", job.output.display()));
-        runtime().spawn(backend::rip(self.tx.clone(), job, cancel));
+        let cancel = self.state.borrow().rip_cancel.clone().unwrap_or_default();
+        runtime().spawn(backend::finish(self.tx.clone(), job, cancel));
     }
 
     fn cancel_rip(self: &Rc<Self>) {
         let me = self.clone();
         glib::spawn_future_local(async move {
             if me.ask("Annuler le rip ?", "Le fichier partiel sera supprimé.", "Annuler le rip").await {
-                if let Some(c) = me.state.borrow().rip_cancel.as_ref() {
+                let s = me.state.borrow();
+                if let Some(c) = s.rip_cancel.as_ref() {
                     c.cancel();
+                }
+                // Extraction encore en cours : son annulation terminera le rip.
+                if let Some(e) = s.extraction.as_ref().filter(|e| e.result.is_none() && s.pending_output.is_some()) {
+                    e.cancel.cancel();
                 }
             }
         });
@@ -558,14 +1056,13 @@ impl App {
     fn set_ripping_ui(&self, ripping: bool) {
         self.ui.disc_content.set_sensitive(!ripping);
         self.ui.refresh_btn.set_sensitive(!ripping);
+        self.ui.eject_btn.set_sensitive(!ripping);
         if ripping {
             self.ui.rip_btn.set_label("Annuler");
-            self.ui.rip_btn.remove_css_class("suggested-action");
-            self.ui.rip_btn.add_css_class("destructive-action");
+            self.ui.rip_btn.add_css_class("cancel");
         } else {
             self.ui.rip_btn.set_label("Lancer le Rip");
-            self.ui.rip_btn.remove_css_class("destructive-action");
-            self.ui.rip_btn.add_css_class("suggested-action");
+            self.ui.rip_btn.remove_css_class("cancel");
         }
     }
 
@@ -573,6 +1070,7 @@ impl App {
         {
             let mut s = self.state.borrow_mut();
             s.rip_cancel = None;
+            s.pending_output = None;
             if let Some(c) = s.inhibit_cookie.take() {
                 self.app.uninhibit(c);
             }

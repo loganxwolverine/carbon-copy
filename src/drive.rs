@@ -54,10 +54,41 @@ pub fn has_disc(dev: &str) -> bool {
         .unwrap_or(false)
 }
 
+const CDROM_LOCKDOOR: libc::c_ulong = 0x5329;
+
 /// Éjecte le disque.
-pub fn eject(dev: &str) -> bool {
-    // SAFETY : ioctl sans argument.
-    with_device(dev, |fd| unsafe { libc::ioctl(fd, CDROMEJECT as _, 0) } == 0).unwrap_or(false)
+///
+/// MakeMKV verrouille le tiroir pendant la lecture, et le lecteur peut rester
+/// occupé quelques secondes après la fin d'un rip. On déverrouille donc le
+/// tiroir, on réessaie plusieurs fois, puis on se rabat sur la commande
+/// `eject` (util-linux), qui démonte aussi le disque s'il a été monté.
+/// Fonction bloquante : à appeler via `spawn_blocking`.
+pub fn eject(dev: &str) -> Result<(), String> {
+    let mut last_err = String::from("périphérique inaccessible");
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        let r = with_device(dev, |fd| {
+            // SAFETY : ioctls documentés de linux/cdrom.h, argument entier.
+            unsafe { libc::ioctl(fd, CDROM_LOCKDOOR as _, 0) };
+            if unsafe { libc::ioctl(fd, CDROMEJECT as _, 0) } == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error().to_string())
+            }
+        });
+        match r {
+            Some(Ok(())) => return Ok(()),
+            Some(Err(e)) => last_err = e,
+            None => last_err = std::io::Error::last_os_error().to_string(),
+        }
+    }
+    match std::process::Command::new("eject").arg(dev).output() {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => Err(format!("{last_err} ; eject : {}", String::from_utf8_lossy(&o.stderr).trim())),
+        Err(_) => Err(last_err),
+    }
 }
 
 /// Boucle de surveillance : émet `DriveState` à chaque changement d'état.

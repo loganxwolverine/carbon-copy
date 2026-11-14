@@ -57,12 +57,15 @@ pub mod attr {
     pub const NAME: u32 = 2;
     pub const LANG_CODE: u32 = 3;
     pub const LANG_NAME: u32 = 4;
+    /// Identifiant de codec Matroska (`V_MPEG2`, `A_AC3`, `S_VOBSUB`…), non traduit.
+    pub const CODEC_ID: u32 = 5;
     pub const CODEC_SHORT: u32 = 6;
     pub const CODEC_LONG: u32 = 7;
     pub const CHAPTER_COUNT: u32 = 8;
     pub const DURATION: u32 = 9;
     pub const DISK_SIZE: u32 = 10;
     pub const DISK_SIZE_BYTES: u32 = 11;
+    pub const AUDIO_CHANNELS: u32 = 14;
     pub const SOURCE_FILE: u32 = 16;
     pub const VIDEO_SIZE: u32 = 19;
     pub const STREAM_FLAGS: u32 = 22;

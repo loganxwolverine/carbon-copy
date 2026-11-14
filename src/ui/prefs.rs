@@ -62,6 +62,11 @@ pub fn show(parent: &adw::ApplicationWindow, cfg: Config, tx: Tx, on_close: impl
     minlen_row.set_title("Durée minimale des titres (s)");
     minlen_row.set_value(cfg.borrow().min_length_secs as f64);
     let eject_row = adw::SwitchRow::builder().title("Éjecter le disque à la fin").active(cfg.borrow().eject_when_done).build();
+    let prepare_row = adw::SwitchRow::builder()
+        .title("Préparer l'extraction pendant la vérification")
+        .subtitle("MakeMKV copie le titre dès la fin de l'analyse : le rip démarre sans nouvelle analyse")
+        .active(cfg.borrow().prepare_in_background)
+        .build();
     let folder_btn = gtk::Button::builder().icon_name("folder-open-symbolic").valign(gtk::Align::Center).css_classes(["flat"]).build();
     let folder_row = adw::ActionRow::builder()
         .title("Dossier par défaut")
@@ -71,6 +76,7 @@ pub fn show(parent: &adw::ApplicationWindow, cfg: Config, tx: Tx, on_close: impl
     folder_row.set_activatable_widget(Some(&folder_btn));
     rip_group.add(&minlen_row);
     rip_group.add(&eject_row);
+    rip_group.add(&prepare_row);
     rip_group.add(&folder_row);
 
     {
@@ -160,6 +166,7 @@ pub fn show(parent: &adw::ApplicationWindow, cfg: Config, tx: Tx, on_close: impl
         c.tmdb_api_key = tmdb_row.text().trim().to_string();
         c.min_length_secs = minlen_row.value() as u32;
         c.eject_when_done = eject_row.is_active();
+        c.prepare_in_background = prepare_row.is_active();
         let sources: Vec<String> = source_row.text().split_whitespace().map(String::from).collect();
         if !sources.is_empty() {
             c.beta_key_sources = sources;

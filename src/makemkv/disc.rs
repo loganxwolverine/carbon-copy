@@ -45,13 +45,39 @@ impl Stream {
         self.attrs.get(&id).map(String::as_str).unwrap_or("")
     }
 
+    /// Type du flux.
+    ///
+    /// Le libellé `SINFO 1` est TRADUIT par MakeMKV (« Vidéo », « Sous-titres »
+    /// en français) : on se fonde d'abord sur l'identifiant de codec Matroska,
+    /// stable quelle que soit la langue.
     pub fn kind(&self) -> StreamKind {
+        match self.codec_id().get(..2) {
+            Some("V_") => return StreamKind::Video,
+            Some("A_") => return StreamKind::Audio,
+            Some("S_") => return StreamKind::Subtitle,
+            _ => {}
+        }
         match self.get(attr::TYPE) {
-            "Video" => StreamKind::Video,
+            "Video" | "Vidéo" => StreamKind::Video,
             "Audio" => StreamKind::Audio,
-            "Subtitles" => StreamKind::Subtitle,
+            "Subtitles" | "Sous-titres" => StreamKind::Subtitle,
             _ => StreamKind::Other,
         }
+    }
+
+    /// Identifiant de codec Matroska (`V_MPEG2`, `A_DTS`…).
+    pub fn codec_id(&self) -> &str {
+        self.get(attr::CODEC_ID)
+    }
+
+    /// Nombre de canaux audio (0 si inconnu).
+    pub fn channels(&self) -> u32 {
+        self.get(attr::AUDIO_CHANNELS).trim().parse().unwrap_or(0)
+    }
+
+    /// Disposition des canaux, ex. « 5.1(side) ».
+    pub fn audio_layout(&self) -> &str {
+        self.get(attr::AUDIO_LAYOUT)
     }
 
     /// Code langue ISO 639-2 normalisé en variante « T » (ex. `fre` → `fra`).

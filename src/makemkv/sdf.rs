@@ -5,7 +5,7 @@
 //! inséré : il exécute la logique spécifique au lecteur contenue dans `sdf.bin`.
 //! Le réglage `sdf_Stop = "<identifiant du lecteur>"` désactive cette étape.
 //!
-//! L'identifiant (ex. `HL-DT-ST_DVDRAM_GSA-T50N_RE06_20090730123456_M009AQA1959`)
+//! L'identifiant (ex. `HL-DT-ST_DVDRAM_GSA-T50N_RE06_20090730123456_M000EXEMPLE`)
 //! n'apparaît que dans le journal de débogage `~/MakeMKV_log.txt` (option
 //! `--debug`), sur une ligne `SDF auto v0a6: <id>` ou `No  SDF v0a6: <id>`.
 //! L'application lance donc toujours makemkvcon avec `--debug` ; si aucune ligne
@@ -85,13 +85,13 @@ mod tests {
 
     const LOG: &str = "Debug log started at Fri Nov 13 21:28:35 2026\n\
         001003:0020 DEBUG: Code 0 at ZT1Pm.L!,.E|I0:ZpGU.+S:29393631\n\
-        No  SDF v0a6: HL-DT-ST_DVDRAM_GSA-T50N_RE06_20090730123456_M009AQA1959\n\
+        No  SDF v0a6: HL-DT-ST_DVDRAM_GSA-T50N_RE06_20090730123456_M000EXEMPLE\n\
         001003:0020 DEBUG: Code 0 at ZT1Pm.L!,.E|I0:ZpGU.+S:29393631\n\
-        SDF auto v0a6: HL-DT-ST_DVDRAM_GSA-T50N_RE06_20090730123456_M009AQA1959\n";
+        SDF auto v0a6: HL-DT-ST_DVDRAM_GSA-T50N_RE06_20090730123456_M000EXEMPLE\n";
 
     #[test]
     fn extracts_drive_id() {
-        assert_eq!(drive_ids(LOG), vec!["HL-DT-ST_DVDRAM_GSA-T50N_RE06_20090730123456_M009AQA1959".to_string()]);
+        assert_eq!(drive_ids(LOG), vec!["HL-DT-ST_DVDRAM_GSA-T50N_RE06_20090730123456_M000EXEMPLE".to_string()]);
     }
 
     #[test]

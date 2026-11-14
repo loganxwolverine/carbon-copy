@@ -14,6 +14,7 @@ mod backend;
 mod beta_key;
 mod config;
 mod drive;
+mod drive_info;
 mod events;
 mod makemkv;
 mod metadata;

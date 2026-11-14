@@ -26,8 +26,12 @@ pub enum AppEvent {
     AnalysisProgress { label: String, fraction: Option<f64> },
     /// Analyse terminée.
     DiscAnalyzed(Result<DiscInfo, String>),
-    /// Métadonnées trouvées (TMDB ou déduites du disque).
-    Metadata { title: String, year: Option<u32>, source: String },
+    /// Film reconnu sur TMDB (`movie`), ou à défaut titre/année déduits du disque.
+    Metadata { movie: Option<crate::metadata::Movie>, title: String, year: Option<u32> },
+    /// Progression d'une extraction MakeMKV (0.0 – 1.0).
+    ExtractProgress { id: u64, label: String, fraction: f64 },
+    /// Fin d'une extraction : chemin du MKV brut.
+    Extracted { id: u64, result: Result<PathBuf, String> },
     /// Progression du rip (0.0 – 1.0) et libellé de phase.
     RipProgress { label: String, fraction: f64 },
     /// Fin du rip.
