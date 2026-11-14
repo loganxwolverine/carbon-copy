@@ -136,8 +136,7 @@ fn discard(e: ExtractionState) {
     // Extraction encore en cours : c'est elle qui supprime son dossier en
     // s'arrêtant. Sinon, on supprime le MKV brut devenu inutile.
     if e.result.is_some() {
-        let tmp = e.tmp;
-        runtime().spawn_blocking(move || std::fs::remove_dir_all(tmp));
+        runtime().spawn(async move { backend::remove_tmp_dir(&e.tmp).await });
     }
 }
 
@@ -300,6 +299,18 @@ impl App {
         self.app.add_action(&fs);
         self.app.set_accels_for_action("app.fullscreen", &["F11"]);
 
+        // Lancer le rip au clavier (Ctrl+R), comme le bouton.
+        let rip = gio::SimpleAction::new("rip", None);
+        let me = self.clone();
+        rip.connect_activate(move |_, _| {
+            let ready = me.state.borrow().disc.is_some() && me.state.borrow().rip_cancel.is_none();
+            if ready && me.ui.rip_btn.is_sensitive() {
+                me.clone().confirm_and_rip();
+            }
+        });
+        self.app.add_action(&rip);
+        self.app.set_accels_for_action("app.rip", &["<Control>r"]);
+
         let quit = gio::SimpleAction::new("quit", None);
         let me = self.clone();
         quit.connect_activate(move |_, _| me.ui.window.close());
@@ -329,6 +340,13 @@ impl App {
                     s.makemkv = Some(makemkv);
                     s.mkvmerge = Some(mkvmerge);
                 }
+                // Ménage des copies temporaires de sessions interrompues.
+                let (dir, tx) = (self.state.borrow().output_dir.clone(), self.tx.clone());
+                runtime().spawn_blocking(move || {
+                    for p in backend::sweep_stale_tmp(&dir) {
+                        crate::events::log(&tx, format!("Copie temporaire abandonnée supprimée : {}", p.display()));
+                    }
+                });
                 self.ui.refresh_btn.set_sensitive(true);
                 self.ui.eject_btn.set_sensitive(!crate::drive::optical_drives().is_empty());
                 // La sonde MakeMKV vient d'écrire l'identifiant SDF (date du firmware).

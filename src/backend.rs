@@ -232,7 +232,7 @@ pub async fn extract(tx: Tx, job: Extraction, cancel: CancellationToken) {
     let res = extract_inner(&tx, &job, cancel).await;
     if res.is_err() {
         // Annulée ou en échec : rien à garder.
-        let _ = tokio::fs::remove_dir_all(&job.tmp).await;
+        remove_tmp_dir(&job.tmp).await;
     }
     emit(&tx, AppEvent::Extracted { id: job.id, result: res.map_err(|e| format!("{e:#}")) });
 }
@@ -311,7 +311,7 @@ pub const RIP_WEIGHT: f64 = 0.9;
 
 pub async fn finish(tx: Tx, job: FinishJob, cancel: CancellationToken) {
     let res = finish_inner(&tx, &job, cancel).await;
-    let _ = tokio::fs::remove_dir_all(&job.tmp).await;
+    remove_tmp_dir(&job.tmp).await;
     if res.is_ok() && job.cfg.eject_when_done {
         eject(&tx, job.device.clone()).await;
     }
@@ -378,6 +378,40 @@ async fn finish_inner(tx: &Tx, job: &FinishJob, cancel: CancellationToken) -> Re
     Ok(out)
 }
 
+/// Supprime un dossier temporaire d'extraction. MakeMKV (dans son bac à
+/// sable Flatpak) peut garder le fichier ouvert quelques instants après son
+/// arrêt ; sur un partage réseau, la suppression échoue alors : on réessaie.
+pub async fn remove_tmp_dir(dir: &Path) {
+    for _ in 0..10 {
+        if tokio::fs::remove_dir_all(dir).await.is_ok() || !dir.exists() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+/// Préfixe des dossiers temporaires : `.carbon-copy-<pid>-<n>`.
+pub const TMP_PREFIX: &str = ".carbon-copy-";
+
+/// Supprime les dossiers temporaires laissés dans `dir` par des sessions
+/// terminées (application tuée, coupure…). Ceux d'un processus vivant sont
+/// conservés.
+pub fn sweep_stale_tmp(dir: &Path) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return removed };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(pid) = name.strip_prefix(TMP_PREFIX).and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        let alive = pid == std::process::id() || Path::new(&format!("/proc/{pid}")).exists();
+        if !alive && e.file_type().is_ok_and(|t| t.is_dir()) && std::fs::remove_dir_all(e.path()).is_ok() {
+            removed.push(e.path());
+        }
+    }
+    removed
+}
+
 /// Déplace `from` vers `to` : simple renommage sur le même disque, sinon copie.
 async fn move_file(tx: &Tx, from: &Path, to: &Path) -> Result<()> {
     match tokio::fs::rename(from, to).await {
@@ -435,5 +469,25 @@ pub async fn eject(tx: &Tx, device: String) -> bool {
             emit(tx, AppEvent::Toast(format!("Éjection impossible : {e}")));
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sweeps_only_dead_sessions() {
+        let base = std::env::temp_dir().join(format!("cc-sweep-{}", std::process::id()));
+        let dead = base.join(format!("{TMP_PREFIX}4000000000-1"));
+        let mine = base.join(format!("{TMP_PREFIX}{}-3", std::process::id()));
+        let other = base.join("Film (2001).mkv");
+        std::fs::create_dir_all(&dead).unwrap();
+        std::fs::write(dead.join("B1_t00.mkv"), b"x").unwrap();
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::write(&other, b"x").unwrap();
+        assert_eq!(sweep_stale_tmp(&base), vec![dead.clone()]);
+        assert!(!dead.exists() && mine.exists() && other.exists());
+        std::fs::remove_dir_all(base).unwrap();
     }
 }
