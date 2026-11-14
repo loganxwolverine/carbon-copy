@@ -26,6 +26,8 @@ le MKV. Résultat : ré-extraction complète inutile (+44 min), remux de 68 min
   pas les pistes vides : relancer ne servirait à rien) — le film est finalisé
   sans elles, avec un message clair ;
 - le journal liste les pistes trouvées et celles qui manquent.
+**Validé** sur *Freddy : Les Griffes de la nuit* (Blu-ray, 14/11) : pistes
+forcées vides détectées, aucune ré-extraction, aucun remux (mkvpropedit).
 
 ### Désigner la piste HD sans remux ✅ ⏳
 **Constat** : anglais en DTS-HD MA + cœur DTS + AC-3 (Blu-ray) ; la règle ne
@@ -43,6 +45,7 @@ répondait « Échec de l'ouverture du disque » sans explication.
 puis message « Le lecteur ne répond plus : éjectez puis réinsérez le disque ».
 
 ### Relance propre après un changement de sélection ✅
+Validé : deux relances successives, disque rouvert du premier coup.
 L'annulation attend désormais la fin réelle du processus MakeMKV avant d'en
 lancer un autre ; sur Blu-ray le délai avant relance passe de 1,5 s à 5 s
 (chaque relance refait le traitement AACS / BD+).
