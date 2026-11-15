@@ -8,7 +8,9 @@ url="https://github.com/loganxwolverine/carbon-copy"
 license=('GPL-3.0-or-later')
 depends=('gtk4' 'libadwaita' 'flatpak' 'mkvtoolnix-cli' 'hicolor-icon-theme' 'gcc-libs' 'glibc')
 makedepends=('cargo')
-options=('!debug')
+# LTO de makepkg désactivée : les objets C d'aws-lc-sys en bitcode GCC
+# sont illisibles pour l'éditeur de liens de Rust (symboles introuvables).
+options=('!debug' '!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
