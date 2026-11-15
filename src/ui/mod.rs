@@ -132,7 +132,7 @@ pub fn build(app: &adw::Application) {
         }
     });
 
-    if let Ok(robot_file) = std::env::var("CARBON_COPY_DEMO") {
+    if let Ok(robot_file) = std::env::var("INTACT_BITSTREAM_DEMO") {
         this.run_demo(robot_file);
     } else {
         // Surveillance du lecteur optique (dure toute la vie de l'application).
@@ -159,12 +159,12 @@ fn discard(e: ExtractionState) {
     }
 }
 
-/// Aide au développement : `CARBON_COPY_SCREENSHOT=/chemin.png` enregistre une
-/// capture de la fenêtre toutes les `CARBON_COPY_SCREENSHOT_EVERY` secondes
+/// Aide au développement : `INTACT_BITSTREAM_SCREENSHOT=/chemin.png` enregistre une
+/// capture de la fenêtre toutes les `INTACT_BITSTREAM_SCREENSHOT_EVERY` secondes
 /// (10 par défaut), pour vérifier la mise en page sans accès à l'écran.
 fn schedule_debug_screenshot(window: &adw::ApplicationWindow) {
-    let Ok(path) = std::env::var("CARBON_COPY_SCREENSHOT") else { return };
-    let every = std::env::var("CARBON_COPY_SCREENSHOT_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(10);
+    let Ok(path) = std::env::var("INTACT_BITSTREAM_SCREENSHOT") else { return };
+    let every = std::env::var("INTACT_BITSTREAM_SCREENSHOT_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(10);
     let window = window.clone();
     let counter = std::cell::Cell::new(0u32);
     glib::timeout_add_seconds_local(every, move || {
@@ -194,7 +194,7 @@ fn schedule_debug_screenshot(window: &adw::ApplicationWindow) {
 }
 
 impl App {
-    /// Mode démo (développement, `CARBON_COPY_DEMO=<sortie robot de makemkvcon info>`) :
+    /// Mode démo (développement, `INTACT_BITSTREAM_DEMO=<sortie robot de makemkvcon info>`) :
     /// accueil, puis disque tiré du fichier (fiche TMDB réelle), puis rip simulé.
     /// Ni MakeMKV ni le lecteur ne sont utilisés, rien n'est écrit.
     fn run_demo(self: &Rc<Self>, robot_file: String) {
@@ -358,7 +358,7 @@ impl App {
                 .application_name(APP_NAME)
                 .application_icon(crate::APP_ID)
                 .version(env!("CARGO_PKG_VERSION"))
-                .comments("Interface GNOME automatisée pour MakeMKV")
+                .comments("Vos DVD et Blu-ray en MKV, bit pour bit")
                 .license_type(gtk::License::Gpl30)
                 .build();
             d.present(Some(&me.ui.window));
@@ -1329,7 +1329,7 @@ impl App {
             s.extract_seq += 1;
             let id = s.extract_seq;
             // Sur le même disque que la destination : pas de copie inter-disques.
-            let tmp = s.output_dir.join(format!(".carbon-copy-{}-{id}", std::process::id()));
+            let tmp = s.output_dir.join(format!("{}{}-{id}", crate::backend::TMP_PREFIX, std::process::id()));
             let cancel = CancellationToken::new();
             s.extraction = Some(ExtractionState {
                 id,

@@ -20,7 +20,8 @@ jobs:
           - { distro: debian-13, image: 'debian:13', prep: 'apt-get update -q && apt-get install -yq tar gzip' }
           - { distro: fedora-44, image: 'fedora:44', prep: 'dnf install -y tar gzip' }
           - { distro: opensuse-tumbleweed, image: 'opensuse/tumbleweed', prep: 'zypper --non-interactive install tar gzip' }
-          - { distro: arch, image: 'archlinux:latest', prep: 'pacman -Sy --noconfirm tar gzip' }
+          # Arch en attente : paquet à valider avant publication (voir ROADMAP).
+          # - { distro: arch, image: 'archlinux:latest', prep: 'pacman -Sy --noconfirm tar gzip' }
     steps:
       - name: Outils de base
         run: ${{ matrix.prep }}
@@ -49,5 +50,5 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Carbon Copy $TAG" --notes "Paquets natifs pour Ubuntu, Debian, Fedora, openSUSE et Arch Linux."
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Intact Bitstream $TAG" --notes "Paquets natifs pour Ubuntu, Debian, Fedora et openSUSE."
           gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

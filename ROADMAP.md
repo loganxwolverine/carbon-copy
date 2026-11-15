@@ -1,4 +1,4 @@
-# Feuille de route — Carbon Copy
+# Feuille de route — Intact Bitstream
 
 Propositions d'amélioration classées par pertinence (gain pour l'utilisateur
 rapporté à l'effort). Elles sont issues des rips réels : DVD *Ice Storm*,
@@ -76,8 +76,10 @@ de la langue choisie (quelques Mo) et garder la bonne après coup.
 
 ## P2 — Utile
 
-### 4. Tester le paquet Arch 🟢
-Test local interrompu faute de mémoire ; à vérifier via la CI.
+### 4. Paquet Arch 🟢
+Retiré de la v0.1.0. La CI échouait à l'édition des liens d'`aws-lc-sys`
+(LTO de makepkg) ; corrigé par `options=('!lto')` dans le PKGBUILD mais
+non testé. À réactiver dans la CI puis valider sur une vraie machine Arch.
 
 ### 5. Étiquette HDR / Dolby Vision dans le nom des UHD 🟢
 « 2160p HEVC » ne dit pas si le film est en HDR10 ou Dolby Vision.

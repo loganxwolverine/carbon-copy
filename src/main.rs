@@ -1,4 +1,4 @@
-//! Carbon Copy — interface GTK4 / libadwaita automatisée pour MakeMKV.
+//! Intact Bitstream — interface GTK4 / libadwaita automatisée pour MakeMKV.
 //!
 //! Architecture :
 //! - `ui`        : fenêtre, widgets, contrôleur (thread GTK uniquement)
@@ -28,7 +28,7 @@ mod ui;
 
 use adw::prelude::*;
 
-pub const APP_ID: &str = "io.github.carboncopy.CarbonCopy";
+pub const APP_ID: &str = "io.github.loganxwolverine.IntactBitstream";
 
 fn main() -> gtk::glib::ExitCode {
     // Démarre le runtime tokio avant GTK (création paresseuse, threads dédiés).
@@ -36,7 +36,7 @@ fn main() -> gtk::glib::ExitCode {
     config::migrate_legacy_dir();
 
     // Mode démo (développement) : instance indépendante de celle de l'utilisateur.
-    let flags = if std::env::var_os("CARBON_COPY_DEMO").is_some() {
+    let flags = if std::env::var_os("INTACT_BITSTREAM_DEMO").is_some() {
         gtk::gio::ApplicationFlags::NON_UNIQUE
     } else {
         gtk::gio::ApplicationFlags::empty()

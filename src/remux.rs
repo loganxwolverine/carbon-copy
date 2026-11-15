@@ -483,7 +483,7 @@ mod integration {
     #[tokio::test]
     #[ignore = "nécessite mkvmerge"]
     async fn remux_keeps_only_forced_french() {
-        let dir = std::env::temp_dir().join(format!("carbon-copy-it-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("intact-bitstream-it-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let srt = "1\n00:00:01,000 --> 00:00:02,000\nBonjour\n";
         for n in ["a", "b", "c"] {
@@ -527,7 +527,7 @@ SINFO:0,2,3,0,"eng""#;
     #[tokio::test]
     #[ignore = "nécessite mkvmerge et mkvpropedit"]
     async fn propedit_sets_flags_in_place() {
-        let dir = std::env::temp_dir().join(format!("carbon-copy-pe-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("intact-bitstream-pe-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let srt = "1\n00:00:01,000 --> 00:00:02,000\nBonjour\n";
         for n in ["a", "b"] {

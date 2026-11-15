@@ -1,21 +1,28 @@
 //! Préférences de l'application, stockées en TOML dans
-//! `~/.config/carbon-copy/config.toml`.
+//! `~/.config/intact-bitstream/config.toml`.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub const APP_DIR: &str = "carbon-copy";
-/// Ancien nom du dossier de configuration (application « MKV Ripper »).
-const LEGACY_APP_DIR: &str = "mkv-ripper";
+pub const APP_DIR: &str = "intact-bitstream";
+/// Anciens noms de l'application (« Carbon Copy », puis « MKV Ripper »),
+/// du plus récent au plus ancien.
+const LEGACY_APP_DIRS: [&str; 2] = ["carbon-copy", "mkv-ripper"];
 
-/// Reprend `~/.config/mkv-ripper` (réglages, clé, règle de sélection à restaurer)
-/// s'il existe et que le nouveau dossier n'existe pas encore.
+/// Reprend les dossiers d'un ancien nom de l'application (réglages, clé,
+/// règle de sélection à restaurer, historique, affiches en cache) s'ils
+/// existent et que le nouveau dossier n'existe pas encore.
 pub fn migrate_legacy_dir() {
-    let base = gtk::glib::user_config_dir();
-    let (old, new) = (base.join(LEGACY_APP_DIR), base.join(APP_DIR));
-    if old.is_dir() && !new.exists() {
-        let _ = std::fs::rename(old, new);
+    use gtk::glib;
+    for base in [glib::user_config_dir(), glib::user_data_dir(), glib::user_cache_dir()] {
+        let new = base.join(APP_DIR);
+        if new.exists() {
+            continue;
+        }
+        if let Some(old) = LEGACY_APP_DIRS.iter().map(|d| base.join(d)).find(|d| d.is_dir()) {
+            let _ = std::fs::rename(old, new);
+        }
     }
 }
 

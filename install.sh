@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Carbon Copy — installation automatique.
+# Intact Bitstream — installation automatique.
 #
-#   curl -fsSL https://raw.githubusercontent.com/loganxwolverine/carbon-copy/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/loganxwolverine/intact-bitstream/main/install.sh | bash
 #
 # Le script installe TOUT ce qui est nécessaire, avec une seule intervention :
 # votre mot de passe administrateur (sudo), demandé une fois au début.
@@ -10,7 +10,7 @@
 #      Flatpak, MKVToolNix, eject ;
 #   2. Rust (via rustup, dans votre dossier personnel) si la version de la
 #      distribution est trop ancienne ;
-#   3. compilation de Carbon Copy et installation dans ~/.local (menu + icône) ;
+#   3. compilation d'Intact Bitstream et installation dans ~/.local (menu + icône) ;
 #   4. MakeMKV depuis Flathub (en mode utilisateur) ;
 #   5. accès au lecteur : module « sg » (Blu-ray) et groupe du lecteur ;
 #   6. lancement de l'application.
@@ -29,11 +29,11 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/loganxwolverine/carbon-copy.git"
-APP_ID="io.github.carboncopy.CarbonCopy"
-PREFIX="${CARBON_COPY_PREFIX:-$HOME/.local}"
+REPO_URL="https://github.com/loganxwolverine/intact-bitstream.git"
+APP_ID="io.github.loganxwolverine.IntactBitstream"
+PREFIX="${INTACT_BITSTREAM_PREFIX:-$HOME/.local}"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-SRC_DIR="$DATA_HOME/carbon-copy/src"
+SRC_DIR="$DATA_HOME/intact-bitstream/src"
 MIN_RUST="1.92"
 MIN_GTK="4.14"
 MIN_ADW="1.5"
@@ -68,23 +68,32 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # Vrai si la version $1 est >= $2.
 version_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
 
+# Ancien nom de l'application (« Carbon Copy ») : retire l'ancienne entrée de
+# menu et reprend les sources déjà téléchargées.
+remove_legacy() {
+    rm -f "$PREFIX/bin/carbon-copy" \
+          "$DATA_HOME/applications/io.github.carboncopy.CarbonCopy.desktop" \
+          "$DATA_HOME/icons/hicolor/scalable/apps/io.github.carboncopy.CarbonCopy.svg"
+}
+
 # --- Désinstallation ------------------------------------------------------------
 if [ "$UNINSTALL" = 1 ]; then
-    step "Désinstallation de Carbon Copy"
-    rm -f "$PREFIX/bin/carbon-copy" \
+    step "Désinstallation d'Intact Bitstream"
+    remove_legacy
+    rm -f "$PREFIX/bin/intact-bitstream" \
           "$DATA_HOME/applications/$APP_ID.desktop" \
           "$DATA_HOME/icons/hicolor/scalable/apps/$APP_ID.svg"
     if [ "$PURGE" = 1 ]; then
-        rm -rf "$DATA_HOME/carbon-copy" "${XDG_CONFIG_HOME:-$HOME/.config}/carbon-copy"
+        rm -rf "$DATA_HOME/intact-bitstream" "${XDG_CONFIG_HOME:-$HOME/.config}/intact-bitstream"
         ok "Application, sources et réglages supprimés."
     else
-        ok "Application supprimée (réglages conservés dans ~/.config/carbon-copy)."
+        ok "Application supprimée (réglages conservés dans ~/.config/intact-bitstream)."
     fi
     echo "  MakeMKV (Flatpak) est conservé. Pour le retirer : flatpak uninstall --user $MAKEMKV_FLATPAK"
     exit 0
 fi
 
-[ "$(uname -s)" = Linux ] || die "Carbon Copy fonctionne uniquement sous Linux."
+[ "$(uname -s)" = Linux ] || die "Intact Bitstream fonctionne uniquement sous Linux."
 [ -r /etc/os-release ] || die "Distribution inconnue (/etc/os-release absent)."
 # shellcheck disable=SC1091
 . /etc/os-release
@@ -110,7 +119,7 @@ case "$FAMILY" in
     *) PKGS=() ;;
 esac
 
-printf '%sCarbon Copy%s — installation automatique sur %s\n' "$B" "$N" "$DISTRO"
+printf '%sIntact Bitstream%s — installation automatique sur %s\n' "$B" "$N" "$DISTRO"
 
 # --- Droits administrateur (une seule demande) --------------------------------------
 SUDO=""
@@ -154,7 +163,7 @@ have pkg-config || die "pkg-config est introuvable."
 GTK_V=$(pkg-config --modversion gtk4 2>/dev/null || echo 0)
 ADW_V=$(pkg-config --modversion libadwaita-1 2>/dev/null || echo 0)
 if ! version_ge "$GTK_V" "$MIN_GTK" || ! version_ge "$ADW_V" "$MIN_ADW"; then
-    die "$DISTRO fournit GTK $GTK_V et libadwaita $ADW_V ; Carbon Copy exige GTK ≥ $MIN_GTK et libadwaita ≥ $MIN_ADW.
+    die "$DISTRO fournit GTK $GTK_V et libadwaita $ADW_V ; Intact Bitstream exige GTK ≥ $MIN_GTK et libadwaita ≥ $MIN_ADW.
    Distributions compatibles : Fedora 40+, Ubuntu 24.04+, Debian 13+, Arch, openSUSE Tumbleweed / Leap 16."
 fi
 ok "GTK $GTK_V, libadwaita $ADW_V"
@@ -179,9 +188,12 @@ else
 fi
 
 # --- 3. Sources, compilation, installation ------------------------------------------------
-step "3/6 Compilation de Carbon Copy"
+step "3/6 Compilation d'Intact Bitstream"
+if [ -d "$DATA_HOME/carbon-copy" ] && [ ! -e "$DATA_HOME/intact-bitstream" ]; then
+    mv "$DATA_HOME/carbon-copy" "$DATA_HOME/intact-bitstream"
+fi
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "")
-if [ -n "$SCRIPT_DIR" ] && grep -qs '^name = "carbon-copy"' "$SCRIPT_DIR/Cargo.toml"; then
+if [ -n "$SCRIPT_DIR" ] && grep -qs '^name = "intact-bitstream"' "$SCRIPT_DIR/Cargo.toml"; then
     SRC="$SCRIPT_DIR"
     echo "  Sources locales : $SRC"
 else
@@ -201,17 +213,18 @@ if [ "${FREE_MB:-0}" -lt 2000 ]; then
     die "Espace disque insuffisant pour compiler : $((FREE_MB / 1024)) Go libres dans $SRC, il en faut au moins 2. Libérez de la place puis relancez."
 fi
 ( cd "$SRC" && cargo build --release --locked )
-install -Dm755 "$SRC/target/release/carbon-copy" "$PREFIX/bin/carbon-copy"
+install -Dm755 "$SRC/target/release/intact-bitstream" "$PREFIX/bin/intact-bitstream"
 # Chemin absolu dans le lanceur : ~/.local/bin n'est pas toujours dans le PATH
 # de la session graphique.
 DESKTOP_TMP=$(mktemp)
-sed "s|^Exec=.*|Exec=$PREFIX/bin/carbon-copy|" "$SRC/data/$APP_ID.desktop" > "$DESKTOP_TMP"
+sed "s|^Exec=.*|Exec=$PREFIX/bin/intact-bitstream|" "$SRC/data/$APP_ID.desktop" > "$DESKTOP_TMP"
 install -Dm644 "$DESKTOP_TMP" "$DATA_HOME/applications/$APP_ID.desktop"
 rm -f "$DESKTOP_TMP"
 install -Dm644 "$SRC/data/icons/hicolor/scalable/apps/$APP_ID.svg" "$DATA_HOME/icons/hicolor/scalable/apps/$APP_ID.svg"
 have update-desktop-database && update-desktop-database -q "$DATA_HOME/applications" 2>/dev/null || true
 have gtk-update-icon-cache && gtk-update-icon-cache -q -t "$DATA_HOME/icons/hicolor" 2>/dev/null || true
-ok "Installée dans $PREFIX/bin/carbon-copy (menu des applications + icône)."
+remove_legacy
+ok "Installée dans $PREFIX/bin/intact-bitstream (menu des applications + icône)."
 # Sources téléchargées par le script : les fichiers de compilation ne servent plus.
 if [ "$SRC" = "$SRC_DIR" ]; then
     ( cd "$SRC" && cargo clean -q ) && ok "Fichiers de compilation supprimés (place libérée)."
@@ -270,12 +283,12 @@ fi
 
 # --- 6. Lancement ------------------------------------------------------------------------
 step "6/6 Terminé"
-ok "Carbon Copy est installé. Retrouvez-le dans le menu des applications."
+ok "Intact Bitstream est installé. Retrouvez-le dans le menu des applications."
 if [ "$RELOGIN" = 1 ]; then
     warn "Fermez puis rouvrez votre session pour que l'accès au lecteur soit pris en compte."
     LAUNCH=0
 fi
 if [ "$LAUNCH" = 1 ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; }; then
     echo "  Lancement…"
-    setsid "$PREFIX/bin/carbon-copy" >/dev/null 2>&1 < /dev/null &
+    setsid "$PREFIX/bin/intact-bitstream" >/dev/null 2>&1 < /dev/null &
 fi

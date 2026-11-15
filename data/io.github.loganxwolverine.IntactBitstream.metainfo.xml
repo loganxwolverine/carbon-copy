@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.carboncopy.CarbonCopy</id>
+  <id>io.github.loganxwolverine.IntactBitstream</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <name>Carbon Copy</name>
-  <summary>Copie conforme de vos DVD et Blu-ray en MKV</summary>
+  <name>Intact Bitstream</name>
+  <summary>Vos DVD et Blu-ray en MKV, sans perte</summary>
   <description>
     <p>
-      Carbon Copy pilote MakeMKV pour extraire vos DVD et Blu-ray en fichiers MKV,
+      Intact Bitstream pilote MakeMKV pour extraire vos DVD et Blu-ray en fichiers MKV,
       sans réglage manuel : reconnaissance du film avec son affiche (TMDB),
       choix automatique des pistes audio et sous-titres, nommage complet du
       fichier et éjection en fin de copie.
@@ -16,15 +16,15 @@
       MakeMKV est installé et mis à jour automatiquement depuis Flathub.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.carboncopy.CarbonCopy.desktop</launchable>
-  <url type="homepage">https://github.com/loganxwolverine/carbon-copy</url>
-  <url type="bugtracker">https://github.com/loganxwolverine/carbon-copy/issues</url>
-  <developer id="io.github.carboncopy">
-    <name>Carbon Copy</name>
+  <launchable type="desktop-id">io.github.loganxwolverine.IntactBitstream.desktop</launchable>
+  <url type="homepage">https://github.com/loganxwolverine/intact-bitstream</url>
+  <url type="bugtracker">https://github.com/loganxwolverine/intact-bitstream/issues</url>
+  <developer id="io.github.loganxwolverine">
+    <name>loganxwolverine</name>
   </developer>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/loganxwolverine/carbon-copy/main/docs/screenshots/carbon-copy.png</image>
+      <image>https://raw.githubusercontent.com/loganxwolverine/intact-bitstream/main/docs/screenshots/intact-bitstream.png</image>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1"/>

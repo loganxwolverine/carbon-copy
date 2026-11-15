@@ -1,13 +1,13 @@
-# Carbon Copy
+# Intact Bitstream
 
-<img src="data/icons/hicolor/scalable/apps/io.github.carboncopy.CarbonCopy.svg" width="96" alt="">
+<img src="data/icons/hicolor/scalable/apps/io.github.loganxwolverine.IntactBitstream.svg" width="96" alt="">
 
-*Une copie conforme de vos disques.*
+*Vos disques en MKV, bit pour bit : le flux d'origine, intact.*
 
 Interface GTK4 / libadwaita pour **MakeMKV** sous Fedora (GNOME), qui automatise
 le rip d'un DVD, d'un Blu-ray ou d'un Blu-ray UHD.
 
-![Carbon Copy pendant le rip de « La Ligne rouge »](docs/screenshots/carbon-copy.png)
+![Intact Bitstream pendant le rip de « La Ligne rouge »](docs/screenshots/intact-bitstream.png)
 
 | Fiche du film (couleur tirée de l'affiche) | Lecteur : firmware, capacités, zone DVD |
 |---|---|
@@ -37,26 +37,25 @@ le rip d'un DVD, d'un Blu-ray ou d'un Blu-ray UHD.
 
 ### Paquets prêts à installer
 
-La page [Releases](https://github.com/loganxwolverine/carbon-copy/releases/latest) propose un paquet par distribution. Téléchargez celui qui correspond à la vôtre, puis installez-le (double-clic dans la logithèque, ou en ligne de commande) :
+La page [Releases](https://github.com/loganxwolverine/intact-bitstream/releases/latest) propose un paquet par distribution. Téléchargez celui qui correspond à la vôtre, puis installez-le (double-clic dans la logithèque, ou en ligne de commande) :
 
 | Distribution | Fichier | Commande |
 |---|---|---|
-| Ubuntu 24.04+ (Linux Mint 22, Pop!_OS, elementary OS 8) | `…~ubuntu24.04_amd64.deb` | `sudo apt install ./carbon-copy_*~ubuntu24.04_amd64.deb` |
-| Debian 13+ | `…~debian13_amd64.deb` | `sudo apt install ./carbon-copy_*~debian13_amd64.deb` |
-| Fedora 44 | `….fc44.x86_64.rpm` | `sudo dnf install ./carbon-copy-*.fc44.x86_64.rpm` |
-| openSUSE Tumbleweed | `….suse.tw.x86_64.rpm` | `sudo zypper install --allow-unsigned-rpm ./carbon-copy-*.suse.tw.x86_64.rpm` |
-| Arch Linux (Manjaro, EndeavourOS) | `….pkg.tar.zst` | `sudo pacman -U ./carbon-copy-*.pkg.tar.zst` |
+| Ubuntu 24.04+ (Linux Mint 22, Pop!_OS, elementary OS 8) | `…~ubuntu24.04_amd64.deb` | `sudo apt install ./intact-bitstream_*~ubuntu24.04_amd64.deb` |
+| Debian 13+ | `…~debian13_amd64.deb` | `sudo apt install ./intact-bitstream_*~debian13_amd64.deb` |
+| Fedora 44 | `….fc44.x86_64.rpm` | `sudo dnf install ./intact-bitstream-*.fc44.x86_64.rpm` |
+| openSUSE Tumbleweed | `….suse.tw.x86_64.rpm` | `sudo zypper install --allow-unsigned-rpm ./intact-bitstream-*.suse.tw.x86_64.rpm` |
 
-Le paquet installe aussi ses dépendances (GTK 4, libadwaita, Flatpak, MKVToolNix), charge le module `sg` et donne à l'utilisateur connecté l'accès au lecteur. MakeMKV est installé depuis Flathub au premier lancement de l'application. Pour désinstaller : `sudo apt remove carbon-copy`, `sudo dnf remove carbon-copy`, etc.
+Le paquet installe aussi ses dépendances (GTK 4, libadwaita, Flatpak, MKVToolNix), charge le module `sg` et donne à l'utilisateur connecté l'accès au lecteur. MakeMKV est installé depuis Flathub au premier lancement de l'application. Pour désinstaller : `sudo apt remove intact-bitstream`, `sudo dnf remove intact-bitstream`, etc.
 
-Les paquets sont construits automatiquement par GitHub Actions (`.github/workflows/packages.yml`) à chaque tag `v*`, avec `packaging/build.sh` dans un conteneur de chaque distribution. Le `PKGBUILD` d'Arch est aussi fourni dans `packaging/arch/`.
+Les paquets sont construits automatiquement par GitHub Actions (`.github/workflows/packages.yml`) à chaque tag `v*`, avec `packaging/build.sh` dans un conteneur de chaque distribution. Pas encore de paquet Arch Linux : utilisez le script d'installation ci-dessous (le `PKGBUILD` de `packaging/arch/` est en cours de validation).
 
 ### Script d'installation (toutes distributions, compile depuis les sources)
 
-Une seule commande installe tout (paquets système, Rust si besoin, l'application, MakeMKV, l'accès au lecteur) puis lance Carbon Copy. Votre mot de passe administrateur est demandé une seule fois.
+Une seule commande installe tout (paquets système, Rust si besoin, l'application, MakeMKV, l'accès au lecteur) puis lance Intact Bitstream. Votre mot de passe administrateur est demandé une seule fois.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/loganxwolverine/carbon-copy/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/loganxwolverine/intact-bitstream/main/install.sh | bash
 ```
 
 Depuis une copie des sources, c'est la même chose :
@@ -75,13 +74,13 @@ Distributions prises en charge :
 | Arch Linux (et Manjaro, EndeavourOS) | à jour |
 | openSUSE | Tumbleweed, Leap 16 |
 
-Carbon Copy demande GTK 4.14 et libadwaita 1.5 au minimum : Debian 12, Ubuntu 22.04 et Linux Mint 21 sont trop anciennes.
+Intact Bitstream demande GTK 4.14 et libadwaita 1.5 au minimum : Debian 12, Ubuntu 22.04 et Linux Mint 21 sont trop anciennes.
 
 Ce que fait le script :
 
 1. Installe les paquets système : GTK 4 / libadwaita, compilateur, Flatpak, MKVToolNix, eject.
 2. Installe Rust avec rustup, dans votre dossier personnel, si celui de la distribution est trop ancien.
-3. Compile Carbon Copy et l'installe dans `~/.local` (menu des applications et icône).
+3. Compile Intact Bitstream et l'installe dans `~/.local` (menu des applications et icône).
 4. Installe MakeMKV depuis Flathub, en mode utilisateur. La clé bêta est ensuite gérée par l'application.
 5. Prépare l'accès au lecteur : module `sg` chargé à chaque démarrage (Blu-ray) et groupe du lecteur si nécessaire. Dans ce dernier cas, fermez puis rouvrez votre session.
 6. Lance l'application.
@@ -109,18 +108,18 @@ cargo test -- --ignored
 Pour tester l'interface sans lecteur physique, placez un faux `makemkvcon` en tête du `PATH`, puis :
 
 ```bash
-CARBON_COPY_FAKE_DISC=/dev/sr0 cargo run
+INTACT_BITSTREAM_FAKE_DISC=/dev/sr0 cargo run
 ```
 
-Pour vérifier la mise en page sans écran, `CARBON_COPY_SCREENSHOT=/tmp/capture.png` enregistre une capture de la fenêtre toutes les 10 s (`CARBON_COPY_SCREENSHOT_EVERY` pour changer l'intervalle) :
+Pour vérifier la mise en page sans écran, `INTACT_BITSTREAM_SCREENSHOT=/tmp/capture.png` enregistre une capture de la fenêtre toutes les 10 s (`INTACT_BITSTREAM_SCREENSHOT_EVERY` pour changer l'intervalle) :
 
 ```bash
-CARBON_COPY_SCREENSHOT=/tmp/capture.png cargo run
+INTACT_BITSTREAM_SCREENSHOT=/tmp/capture.png cargo run
 ```
 
 ## Configuration
 
-Les préférences sont dans `~/.config/carbon-copy/config.toml` (l'ancien dossier `~/.config/mkv-ripper` est repris automatiquement). On peut aussi les modifier via Menu → Préférences :
+Les préférences sont dans `~/.config/intact-bitstream/config.toml` (l'ancien dossier `~/.config/mkv-ripper` est repris automatiquement). On peut aussi les modifier via Menu → Préférences :
 
 - langue préférée ;
 - conservation de la VO ;

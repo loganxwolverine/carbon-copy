@@ -28,7 +28,7 @@ use super::section::Section;
 use super::theme::Theme;
 use super::timeline::Timeline;
 
-pub const APP_NAME: &str = "Carbon Copy";
+pub const APP_NAME: &str = "Intact Bitstream";
 
 /// Références vers tous les widgets manipulés par le contrôleur.
 pub struct Ui {
@@ -108,7 +108,7 @@ pub fn build(app: &adw::Application) -> Ui {
 
     let menu = gio::Menu::new();
     menu.append(Some("Préférences"), Some("app.preferences"));
-    menu.append(Some("À propos de Carbon Copy"), Some("app.about"));
+    menu.append(Some("À propos d'Intact Bitstream"), Some("app.about"));
     let menu_btn = gtk::MenuButton::builder().icon_name("open-menu-symbolic").menu_model(&menu).primary(true).build();
     let fullscreen_btn = gtk::Button::builder().icon_name("view-fullscreen-symbolic").tooltip_text("Plein écran (F11)").action_name("app.fullscreen").build();
     let log_btn = gtk::ToggleButton::builder().icon_name("utilities-terminal-symbolic").tooltip_text("Journal").build();

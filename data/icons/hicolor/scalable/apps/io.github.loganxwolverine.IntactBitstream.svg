@@ -37,7 +37,7 @@
   <circle cx="48" cy="52" r="13" fill="#9db6d8"/>
   <circle cx="48" cy="52" r="5.5" fill="#f6f8fb"/>
 
-  <!-- Copie conforme : fichier à coin plié -->
+  <!-- Fichier à coin plié -->
   <path d="M60 38 h32 l18 18 v54 a6 6 0 0 1 -6 6 h-44 a6 6 0 0 1 -6 -6 v-66 a6 6 0 0 1 6 -6 z"
         fill="#0d2442" opacity="0.20" transform="translate(0 3)"/>
   <path d="M60 36 h32 l18 18 v54 a6 6 0 0 1 -6 6 h-44 a6 6 0 0 1 -6 -6 v-66 a6 6 0 0 1 6 -6 z"

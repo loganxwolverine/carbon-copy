@@ -1,7 +1,7 @@
 //! Historique des rips : vidéothèque de l'écran d'accueil et alerte « déjà
 //! copié ».
 //!
-//! Chaque rip réussi est ajouté à `~/.local/share/carbon-copy/history.json`.
+//! Chaque rip réussi est ajouté à `~/.local/share/intact-bitstream/history.json`.
 //! Les films déjà présents dans le dossier de destination (rips antérieurs à
 //! l'historique) sont repris d'après leur nom :
 //! `Titre (Année) [tmdbid-N] - caractéristiques.mkv`.

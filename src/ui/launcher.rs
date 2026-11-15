@@ -32,6 +32,6 @@ impl Launcher {
         props.insert("progress-visible".into(), fraction.is_some().to_variant());
         let uri = format!("application://{}.desktop", crate::APP_ID);
         let params = (uri, props).to_variant();
-        let _ = conn.emit_signal(None, "/io/github/carboncopy/CarbonCopy/launcher", "com.canonical.Unity.LauncherEntry", "Update", Some(&params));
+        let _ = conn.emit_signal(None, "/io/github/loganxwolverine/IntactBitstream/launcher", "com.canonical.Unity.LauncherEntry", "Update", Some(&params));
     }
 }

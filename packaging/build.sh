@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Construit le paquet natif de Carbon Copy pour la distribution courante.
+# Construit le paquet natif d'Intact Bitstream pour la distribution courante.
 # Prévu pour tourner (en root) dans un conteneur propre de la distribution
 # cible : c'est ce que fait l'intégration continue GitHub.
 #
@@ -32,7 +32,7 @@ ensure_rust() {
 }
 
 compile() {
-  say "Compilation de Carbon Copy $VERSION"
+  say "Compilation d'Intact Bitstream $VERSION"
   cd "$ROOT"
   cargo build --release --locked
   cargo test --release --locked
@@ -53,23 +53,23 @@ build_deb() {
 
   # Dépendances calculées depuis les bibliothèques réellement liées.
   mkdir -p "$WORK/shlib/debian"
-  printf 'Source: carbon-copy\n\nPackage: carbon-copy\nArchitecture: any\n' > "$WORK/shlib/debian/control"
+  printf 'Source: intact-bitstream\n\nPackage: intact-bitstream\nArchitecture: any\n' > "$WORK/shlib/debian/control"
   local shlibs
-  shlibs=$(cd "$WORK/shlib" && dpkg-shlibdeps -O "$stage/usr/bin/carbon-copy" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+  shlibs=$(cd "$WORK/shlib" && dpkg-shlibdeps -O "$stage/usr/bin/intact-bitstream" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
 
   mkdir -p "$stage/DEBIAN"
   cat > "$stage/DEBIAN/control" <<CTRL
-Package: carbon-copy
+Package: intact-bitstream
 Version: $ver
 Architecture: $arch
-Maintainer: Carbon Copy <https://github.com/loganxwolverine/carbon-copy>
+Maintainer: Intact Bitstream <https://github.com/loganxwolverine/intact-bitstream>
 Installed-Size: $(du -sk "$stage/usr" | cut -f1)
 Depends: $shlibs, flatpak, mkvtoolnix, hicolor-icon-theme
 Recommends: eject
 Section: video
 Priority: optional
-Homepage: https://github.com/loganxwolverine/carbon-copy
-Description: Copie conforme de vos DVD et Blu-ray en MKV
+Homepage: https://github.com/loganxwolverine/intact-bitstream
+Description: Vos DVD et Blu-ray en MKV, sans perte
  Interface GTK4/libadwaita qui pilote MakeMKV : reconnaissance du film avec
  son affiche, choix automatique des pistes, nommage complet du fichier et
  éjection en fin de copie. MakeMKV est installé automatiquement depuis Flathub.
@@ -84,7 +84,7 @@ if [ "$1" = configure ]; then
 fi
 POST
   chmod 755 "$stage/DEBIAN/postinst"
-  local file="$OUT/carbon-copy_${ver}_${arch}.deb"
+  local file="$OUT/intact-bitstream_${ver}_${arch}.deb"
   dpkg-deb --root-owner-group --build "$stage" "$file"
   say "Paquet : $file"
 }
@@ -104,7 +104,7 @@ build_rpm() {
   compile
   local stage="$WORK/pkg"
   "$ROOT/packaging/stage.sh" "$stage"
-  rpmbuild -bb "$ROOT/packaging/rpm/carbon-copy.spec" \
+  rpmbuild -bb "$ROOT/packaging/rpm/intact-bitstream.spec" \
     --define "_topdir $WORK/rpmbuild" \
     --define "ver $VERSION" --define "rel $REL$dist" --define "stage $stage"
   find "$WORK/rpmbuild/RPMS" -name '*.rpm' -exec cp -v {} "$OUT/" \;
@@ -120,7 +120,7 @@ build_arch() {
   sed -i "s/^pkgver=.*/pkgver=$VERSION/" "$dir/PKGBUILD"
   # Sources locales à la place de l'archive GitHub (même nom = pas de téléchargement).
   tar --exclude=./target --exclude=./dist --exclude=./.git \
-      --transform "s,^\.,carbon-copy-$VERSION," -czf "$dir/carbon-copy-$VERSION.tar.gz" -C "$ROOT" .
+      --transform "s,^\.,intact-bitstream-$VERSION," -czf "$dir/intact-bitstream-$VERSION.tar.gz" -C "$ROOT" .
   chown -R builder "$dir"
   chmod 755 "$WORK"
   su builder -c "cd '$dir' && PKGDEST='$dir/out' makepkg --noconfirm"

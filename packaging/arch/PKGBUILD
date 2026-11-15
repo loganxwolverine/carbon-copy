@@ -1,10 +1,10 @@
-# Maintainer: Carbon Copy <https://github.com/loganxwolverine/carbon-copy>
-pkgname=carbon-copy
+# Maintainer: Intact Bitstream <https://github.com/loganxwolverine/intact-bitstream>
+pkgname=intact-bitstream
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Copie conforme de vos DVD et Blu-ray en MKV (interface GTK4 pour MakeMKV)"
+pkgdesc="Vos DVD et Blu-ray en MKV, sans perte (interface GTK4 pour MakeMKV)"
 arch=('x86_64')
-url="https://github.com/loganxwolverine/carbon-copy"
+url="https://github.com/loganxwolverine/intact-bitstream"
 license=('GPL-3.0-or-later')
 depends=('gtk4' 'libadwaita' 'flatpak' 'mkvtoolnix-cli' 'hicolor-icon-theme' 'gcc-libs' 'glibc')
 makedepends=('cargo')

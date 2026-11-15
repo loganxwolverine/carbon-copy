@@ -32,7 +32,7 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
-            .thread_name("carbon-copy-worker")
+            .thread_name("intact-bitstream-worker")
             .build()
             .expect("création du runtime tokio")
     })
@@ -42,7 +42,7 @@ pub fn http() -> &'static reqwest::Client {
     static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
     HTTP.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent(concat!("carbon-copy/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("intact-bitstream/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(20))
             .build()
             .expect("client HTTP")
@@ -405,8 +405,10 @@ pub async fn remove_tmp_dir(dir: &Path) {
     }
 }
 
-/// Préfixe des dossiers temporaires : `.carbon-copy-<pid>-<n>`.
-pub const TMP_PREFIX: &str = ".carbon-copy-";
+/// Préfixe des dossiers temporaires : `.intact-bitstream-<pid>-<n>`.
+pub const TMP_PREFIX: &str = ".intact-bitstream-";
+/// Préfixe utilisé sous l'ancien nom de l'application (nettoyé aussi).
+const LEGACY_TMP_PREFIX: &str = ".carbon-copy-";
 
 /// Supprime les dossiers temporaires laissés dans `dir` par des sessions
 /// terminées (application tuée, coupure…). Ceux d'un processus vivant sont
@@ -416,7 +418,7 @@ pub fn sweep_stale_tmp(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return removed };
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let Some(pid) = name.strip_prefix(TMP_PREFIX).and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else {
+        let Some(pid) = name.strip_prefix(TMP_PREFIX).or_else(|| name.strip_prefix(LEGACY_TMP_PREFIX)).and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else {
             continue;
         };
         let alive = pid == std::process::id() || Path::new(&format!("/proc/{pid}")).exists();

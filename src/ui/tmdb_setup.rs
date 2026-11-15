@@ -37,7 +37,7 @@ pub fn show(parent: &adw::ApplicationWindow, current: &str, on_saved: impl Fn(St
     let dialog = adw::Dialog::builder().title("Reconnaissance des films").content_width(620).build();
     let intro = gtk::Label::builder()
         .label(
-            "Carbon Copy utilise TMDB, la base de films collaborative et gratuite, pour reconnaître \
+            "Intact Bitstream utilise TMDB, la base de films collaborative et gratuite, pour reconnaître \
              le film, afficher son affiche et nommer le fichier. Il suffit d'une clé personnelle \
              gratuite : trois étapes, environ deux minutes.",
         )
@@ -54,7 +54,7 @@ pub fn show(parent: &adw::ApplicationWindow, current: &str, on_saved: impl Fn(St
         2,
         "Demander une clé d'API",
         "Choisissez « Developer », acceptez les conditions et remplissez le formulaire : \
-         usage personnel, nom de l'application « Carbon Copy ».",
+         usage personnel, nom de l'application « Intact Bitstream ».",
         Some(("Ouvrir la page", api_btn.clone())),
     ));
     steps.add(&step(

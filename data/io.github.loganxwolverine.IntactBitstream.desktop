@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Intact Bitstream
+GenericName=Rip de DVD / Blu-ray
+Comment=Vos DVD et Blu-ray en MKV, sans perte, bit pour bit (MakeMKV)
+Exec=intact-bitstream
+Icon=io.github.loganxwolverine.IntactBitstream
+Terminal=false
+Categories=AudioVideo;Video;GTK;GNOME;
+Keywords=MakeMKV;Blu-ray;DVD;rip;mkv;
+StartupNotify=true
+X-GNOME-UsesNotifications=true

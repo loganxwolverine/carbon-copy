@@ -95,8 +95,8 @@ pub fn eject(dev: &str) -> Result<(), String> {
 pub async fn watch(tx: Tx, cancel: CancellationToken) {
     let mut known: HashMap<String, bool> = HashMap::new();
     // Aide au développement : simule un disque inséré sans lecteur physique
-    // (ex. CARBON_COPY_FAKE_DISC=/dev/sr0 avec un faux makemkvcon dans le PATH).
-    if let Ok(dev) = std::env::var("CARBON_COPY_FAKE_DISC") {
+    // (ex. INTACT_BITSTREAM_FAKE_DISC=/dev/sr0 avec un faux makemkvcon dans le PATH).
+    if let Ok(dev) = std::env::var("INTACT_BITSTREAM_FAKE_DISC") {
         emit(&tx, AppEvent::DriveState { device: dev, has_disc: true });
         cancel.cancelled().await;
         return;
