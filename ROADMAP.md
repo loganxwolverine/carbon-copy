@@ -54,10 +54,10 @@ lancer un autre ; sur Blu-ray le délai avant relance passe de 1,5 s à 5 s
 
 ## P1 — À faire en priorité
 
-### 1. Publier la version 0.1.0 🟢
-Commits locaux prêts. Bloqué par le jeton GitHub : lancer
-`gh auth refresh -h github.com -s workflow`, puis pousser et créer le tag
-`v0.1.0` pour que la CI construise les paquets.
+### 1. Publier la version 0.1.0 ✅
+Publiée le 15/11/2026 sous le nouveau nom **Intact Bitstream** : paquets
+Ubuntu, Debian, Fedora et openSUSE, testés en conteneur (installation,
+menu, lancement, reprise des réglages de « Carbon Copy »).
 
 ### 2. Valider en conditions réelles 🟢
 - critère `lossless` (voir plus haut) ;
