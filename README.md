@@ -41,8 +41,8 @@ La page [Releases](https://github.com/loganxwolverine/intact-bitstream/releases/
 
 | Distribution | Fichier | Commande |
 |---|---|---|
-| Ubuntu 24.04+ (Linux Mint 22, Pop!_OS, elementary OS 8) | `…~ubuntu24.04_amd64.deb` | `sudo apt install ./intact-bitstream_*~ubuntu24.04_amd64.deb` |
-| Debian 13+ | `…~debian13_amd64.deb` | `sudo apt install ./intact-bitstream_*~debian13_amd64.deb` |
+| Ubuntu 24.04+ (Linux Mint 22, Pop!_OS, elementary OS 8) | `…ubuntu24.04_amd64.deb` | `sudo apt install ./intact-bitstream_*ubuntu24.04_amd64.deb` |
+| Debian 13+ | `…debian13_amd64.deb` | `sudo apt install ./intact-bitstream_*debian13_amd64.deb` |
 | Fedora 44 | `….fc44.x86_64.rpm` | `sudo dnf install ./intact-bitstream-*.fc44.x86_64.rpm` |
 | openSUSE Tumbleweed | `….suse.tw.x86_64.rpm` | `sudo zypper install --allow-unsigned-rpm ./intact-bitstream-*.suse.tw.x86_64.rpm` |
 
