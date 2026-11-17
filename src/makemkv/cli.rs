@@ -6,7 +6,7 @@
 //! processus pour mettre à jour l'interface.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use anyhow::{bail, Context, Result};
@@ -39,6 +39,10 @@ pub struct ProbeResult {
 
 /// Message MakeMKV « Échec de l'ouverture du disque ».
 const MSG_OPEN_FAILED: u32 = 5010;
+/// Message MakeMKV « Échec à l'écriture du titre … » : le fichier est inutilisable.
+const MSG_TITLE_FAILED: u32 = 5003;
+/// Message MakeMKV « Erreur … survenue à la lecture de … » (secteur illisible).
+const MSG_READ_ERROR: u32 = 2003;
 /// Tentatives d'ouverture du disque avant d'abandonner l'extraction.
 const OPEN_ATTEMPTS: u32 = 3;
 
@@ -260,11 +264,17 @@ pub async fn rip(
     let label = Mutex::new(String::from("Extraction"));
     let last = Mutex::new(-1.0f64);
     let mut attempt = 0;
+    let title_failed = AtomicBool::new(false);
+    let read_errors = AtomicU32::new(0);
     let status = loop {
         attempt += 1;
         let open_failed = AtomicBool::new(false);
         let status = run_robot(tool, &args, &[out_dir], tx, Some(cancel.clone()), |l| match l {
             RobotLine::Msg { code: MSG_OPEN_FAILED, .. } => open_failed.store(true, Ordering::Relaxed),
+            RobotLine::Msg { code: MSG_TITLE_FAILED, .. } => title_failed.store(true, Ordering::Relaxed),
+            RobotLine::Msg { code: MSG_READ_ERROR, .. } => {
+                read_errors.fetch_add(1, Ordering::Relaxed);
+            }
             RobotLine::ProgressTitle { name } => *label.lock().unwrap() = name.clone(),
             RobotLine::ProgressValue { total, max, .. } if *max > 0 => {
                 let f = *total as f64 / *max as f64;
@@ -296,6 +306,17 @@ pub async fn rip(
             _ = cancel.cancelled() => bail!("opération annulée"),
         }
     };
+
+    // MakeMKV a abandonné le titre (le plus souvent : zone du disque illisible).
+    // Il peut laisser un fichier partiel et sortir avec le code 0 : ne pas s'y fier.
+    if title_failed.load(Ordering::Relaxed) {
+        let n = read_errors.load(Ordering::Relaxed);
+        if n > 0 {
+            emit(tx, AppEvent::Toast("Échec : le disque est illisible par endroits".into()));
+            bail!("le disque est illisible par endroits ({n} erreurs de lecture) : MakeMKV a abandonné le film");
+        }
+        bail!("MakeMKV n'a pas pu écrire le film (« Échec à l'écriture du titre ») : voir le journal ci-dessus");
+    }
 
     // On retient le plus gros .mkv produit.
     let produced = std::fs::read_dir(out_dir)?
