@@ -33,7 +33,8 @@ forcées vides détectées, aucune ré-extraction, aucun remux (mkvpropedit).
 **Constat** : anglais en DTS-HD MA + cœur DTS + AC-3 (Blu-ray) ; la règle ne
 savait isoler que le cœur, d'où un remux de 26 min (Blu-ray) et 68 min (UHD).
 **Corrigé** : la règle utilise aussi les critères MakeMKV `lossless` et
-`lossy` (ex. `+sel:(audio&eng&lossless)`). **À valider** sur le prochain
+`lossy` (ex. `+sel:(audio&eng&lossless)`). **Validé** le 17/11 sur *Priest*.
+Note d'origine : **À valider** sur le prochain
 Blu-ray : le journal doit afficher « Aucun remux nécessaire ». En cas de
 mauvaise interprétation par MakeMKV, la vérification le détecte (repli
 existant).
@@ -60,7 +61,12 @@ Ubuntu, Debian, Fedora et openSUSE, testés en conteneur (installation,
 menu, lancement, reprise des réglages de « Carbon Copy »).
 
 ### 2. Valider en conditions réelles 🟢
-- critère `lossless` (voir plus haut) ;
+- ✅ critère `lossless` — validé le 17/11 sur *Priest* (Blu-ray) : règle
+  `+sel:(audio&eng&lossless),+sel:(audio&fra),-sel:(audio&fra&core)`,
+  pistes conformes, « Aucun remux nécessaire » (mkvpropedit seul) ; fichier
+  final : DTS-HD MA anglais + DTS-HD MA français + sous-titres forcés ;
+- MakeMKV 2.0 donne les langues en `fra` (et non plus `fre`) : la
+  comparaison le gère déjà, à confirmer sur un rip réussi ;
 - temps restant et vitesse affichés (mesuré : 17–27 Mo/s, limité par
   l'écriture sur le NAS) ;
 - progression sur l'icône de la barre des tâches KDE ;
@@ -104,3 +110,55 @@ au démarrage ; sans effet visible.
 ### 9. Nom de fichier : codec de la meilleure piste ? 🟢
 Le nom décrit la piste audio dans la langue préférée (convention Plex /
 Radarr). À rediscuter si l'on préfère la meilleure piste du fichier.
+
+---
+
+## Nouvelles fonctionnalités (demandées le 17/11/2026)
+
+### 10. Ripper des séries TV (DVD et Blu-ray) 🔴
+**Besoin** : une saison tient sur plusieurs disques ; il faut savoir de
+quelle série et de quelle saison il s'agit, quels épisodes contient chaque
+disque, et les ranger comme Plex / Jellyfin / Kodi l'attendent :
+
+```
+Séries/
+└── Nom de la série (2008) [tmdbid-1396]/
+    └── Season 01/
+        ├── Nom de la série (2008) - S01E01 - Titre de l'épisode.mkv
+        └── Nom de la série (2008) - S01E02 - Titre de l'épisode.mkv
+```
+
+**Pistes à étudier** :
+- *Identifier la série* : étiquette du disque (`BREAKING_BAD_S1_D2`),
+  recherche TMDB (API TV), choix confirmé par l'utilisateur ;
+- *Identifier la saison et le disque* : étiquette, puis demande à
+  l'utilisateur (« saison 1, disque 2 ») ; mémoriser la session de rip pour
+  enchaîner les disques de la saison sans tout ressaisir ;
+- *Reconnaître les épisodes* : titres de durée proche de celle des
+  épisodes TMDB ; écarter les titres « lecture intégrale » (somme des
+  épisodes) et les doublons ; garder l'ordre des playlists / titres du
+  disque ;
+- *Numéroter* : continuer la numérotation d'un disque à l'autre (le
+  disque 2 commence après le dernier épisode du disque 1), avec correction
+  possible avant le rip ;
+- *Ripper plusieurs titres d'un coup* : aujourd'hui l'application extrait un
+  seul titre (le film) ; il faut une file d'épisodes, avec progression
+  globale et par épisode ;
+- *Bonus* : les ignorer, ou les ranger dans `Season 00` / `Extras`.
+
+### 11. Télécommande web 🔴
+**Besoin** : le HTPC est allumé avec l'application lancée par défaut,
+mais l'écran est éteint. Depuis un téléphone ou un autre PC du réseau
+local : voir le disque inséré, confirmer le film (ou la série), lancer le
+rip et suivre son avancement.
+
+**Pistes à étudier** :
+- serveur web intégré à l'application, activable dans les préférences
+  (port configurable), accessible seulement sur le réseau local ;
+- protection par code ou jeton (affiché dans les préférences / QR code) ;
+- pages : état du lecteur, résultat de l'analyse et fiche TMDB, choix des
+  pistes (réglages par défaut), bouton Ripper / Annuler, progression en
+  direct (vitesse, temps restant), vidéothèque des derniers rips ;
+- avancement poussé en temps réel (Server-Sent Events ou WebSocket) à
+  partir des événements déjà émis pour l'interface GTK ;
+- lancement automatique de l'application à l'ouverture de session.
