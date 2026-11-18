@@ -25,20 +25,25 @@ pub fn clean_disc_name(raw: &str) -> (String, Option<u32>) {
     let year_re = Regex::new(r"^(19[0-9]{2}|20[0-9]{2})$").unwrap();
     let disc_re = Regex::new(r"^(DISC|DISK|D)\d+$").unwrap();
     let mut year = None;
-    let words: Vec<String> = raw
-        .split(|c: char| c == '_' || c == '.' || c == '-' || c.is_whitespace())
-        .filter(|w| !w.is_empty())
-        .filter(|w| {
-            if year_re.is_match(w) {
-                year = w.parse().ok();
-                return false;
-            }
-            let up = w.to_uppercase();
-            // « DISC1 », « D2 »… et mots parasites.
-            !(NOISE.contains(&up.as_str()) || disc_re.is_match(&up))
-        })
-        .map(|w| capitalize(&w.to_lowercase()))
-        .collect();
+    // Un numéro isolé après « Disc », « Disk », « Disque » : « Disc 1 ».
+    let mut after_disc_word = false;
+    let mut words: Vec<String> = Vec::new();
+    for w in raw.split(|c: char| c == '_' || c == '.' || c == '-' || c.is_whitespace()).filter(|w| !w.is_empty()) {
+        let up = w.to_uppercase();
+        let follows_disc = std::mem::replace(&mut after_disc_word, matches!(up.as_str(), "DISC" | "DISK" | "DISQUE"));
+        if follows_disc && w.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if year_re.is_match(w) {
+            year = w.parse().ok();
+            continue;
+        }
+        // « DISC1 », « D2 »… et mots parasites.
+        if NOISE.contains(&up.as_str()) || up == "DISQUE" || disc_re.is_match(&up) {
+            continue;
+        }
+        words.push(capitalize(&w.to_lowercase()));
+    }
     let title = if words.is_empty() { raw.trim().to_string() } else { words.join(" ") };
     (title, year)
 }
@@ -432,6 +437,9 @@ mod tests {
         assert_eq!(clean_disc_name("LE_GRAND_FILM_2019"), ("Le Grand Film".into(), Some(2019)));
         assert_eq!(clean_disc_name("THE_MATRIX_DISC1_BLURAY"), ("The Matrix".into(), None));
         assert_eq!(clean_disc_name("INCEPTION_UHD_D1"), ("Inception".into(), None));
+        assert_eq!(clean_disc_name("The Lovely Bones Disc 1"), ("The Lovely Bones".into(), None));
+        assert_eq!(clean_disc_name("APOLLO_13_DISC_2"), ("Apollo 13".into(), None));
+        assert_eq!(clean_disc_name("Amelie 2001 Disque 1"), ("Amelie".into(), Some(2001)));
     }
 
     #[test]
