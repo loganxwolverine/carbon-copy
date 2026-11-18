@@ -10,7 +10,10 @@
 //! - `remux`     : vérification, drapeaux (mkvpropedit) ou tri des pistes (mkvmerge)
 //! - `progress`  : vitesse et temps restant
 //! - `drive`     : détection d'insertion de disque (ioctl)
+//! - `remote`    : télécommande web (serveur HTTP local)
+//! - `autostart` : lancement à l'ouverture de session
 
+mod autostart;
 mod backend;
 mod beta_key;
 mod config;
@@ -22,6 +25,7 @@ mod makemkv;
 mod metadata;
 mod process;
 mod progress;
+mod remote;
 mod remux;
 mod selection;
 mod ui;

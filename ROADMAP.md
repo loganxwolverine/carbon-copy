@@ -146,19 +146,27 @@ Séries/
   globale et par épisode ;
 - *Bonus* : les ignorer, ou les ranger dans `Season 00` / `Extras`.
 
-### 11. Télécommande web 🔴
+### 11. Télécommande web ✅
 **Besoin** : le HTPC est allumé avec l'application lancée par défaut,
 mais l'écran est éteint. Depuis un téléphone ou un autre PC du réseau
 local : voir le disque inséré, confirmer le film (ou la série), lancer le
 rip et suivre son avancement.
 
-**Pistes à étudier** :
-- serveur web intégré à l'application, activable dans les préférences
-  (port configurable), accessible seulement sur le réseau local ;
-- protection par code ou jeton (affiché dans les préférences / QR code) ;
-- pages : état du lecteur, résultat de l'analyse et fiche TMDB, choix des
-  pistes (réglages par défaut), bouton Ripper / Annuler, progression en
-  direct (vitesse, temps restant), vidéothèque des derniers rips ;
-- avancement poussé en temps réel (Server-Sent Events ou WebSocket) à
-  partir des événements déjà émis pour l'interface GTK ;
-- lancement automatique de l'application à l'ouverture de session.
+**Fait** (17–18/11) :
+- serveur intégré, activable dans les préférences (port 8642 par défaut),
+  sans mot de passe (réseau local de confiance, choix de l'utilisateur) ;
+  les actions exigent un en-tête que les sites tiers ne peuvent pas envoyer ;
+- lancement automatique à l'ouverture de session (préférences) ;
+- page pour téléphone : état du lecteur, analyse, fiche TMDB, choix du
+  titre, pistes audio et sous-titres à cocher, modification de la fiche
+  (recherche TMDB, identifiant / lien, ou titre et année saisis),
+  dossier de destination (navigation, création de dossier), Ripper /
+  Annuler / Éjecter, progression en direct, derniers rips, journal ;
+- **validé** le 17/11 : rip de *Lovely Bones* lancé et suivi depuis le
+  téléphone (38,5 Go, 32 min, aucun remux).
+
+- ✅ nom du disque « The Lovely Bones Disc 1 » : « Disc N » / « Disque N »
+  est désormais retiré au nettoyage (donnait « The Lovely Bones 1 »,
+  film non reconnu).
+
+**Reste** : séries TV, à intégrer quand le point 10 sera fait.

@@ -49,6 +49,10 @@ pub struct Config {
     pub tmdb_prompted: bool,
     /// Sources de la clé bêta, essayées dans l'ordre.
     pub beta_key_sources: Vec<String>,
+    /// Télécommande web active (serveur HTTP sur le réseau local).
+    pub remote_enabled: bool,
+    /// Port de la télécommande web.
+    pub remote_port: u16,
 }
 
 impl Default for Config {
@@ -65,6 +69,8 @@ impl Default for Config {
             fullscreen: true,
             tmdb_prompted: false,
             prepare_in_background: true,
+            remote_enabled: false,
+            remote_port: crate::remote::DEFAULT_PORT,
             beta_key_sources: vec![
                 // Source officielle : le fil du forum où l'auteur de MakeMKV publie la clé.
                 "https://forum.makemkv.com/forum/viewtopic.php?t=1053".into(),

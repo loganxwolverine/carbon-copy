@@ -6,6 +6,7 @@ mod library;
 mod movie_card;
 mod movie_dialog;
 mod prefs;
+mod remote_link;
 mod rip_view;
 mod section;
 mod theme;
@@ -31,6 +32,7 @@ use crate::makemkv::rule;
 use crate::makemkv::robot::format_duration;
 use crate::metadata::{self, Movie};
 use crate::process::Tool;
+use crate::remote;
 use crate::selection::{default_selection, Selection};
 
 pub use widgets::APP_NAME;
@@ -106,6 +108,7 @@ pub struct App {
     ui: Ui,
     state: RefCell<State>,
     tx: Tx,
+    remote: remote_link::RemoteLink,
 }
 
 /// Point d'entrée de l'interface (appelé sur `activate`).
@@ -117,10 +120,11 @@ pub fn build(app: &adw::Application) {
     let (tx, rx) = async_channel::unbounded::<AppEvent>();
     let cfg = Config::load();
     let state = State { output_dir: cfg.output_dir.clone(), cfg, ..Default::default() };
-    let this = Rc::new(App { app: app.clone(), ui: widgets::build(app), state: RefCell::new(state), tx });
+    let this = Rc::new(App { app: app.clone(), ui: widgets::build(app), state: RefCell::new(state), tx, remote: Default::default() });
 
     this.connect_signals();
     this.install_actions();
+    this.apply_remote_config();
     this.ui.folder_row.set_subtitle(&this.state.borrow().output_dir.display().to_string());
 
     // Boucle de réception des événements, exécutée sur le thread GTK :
@@ -211,6 +215,10 @@ impl App {
             me.show_disc(info.clone());
             let cfg = me.state.borrow().cfg.clone();
             runtime().spawn(backend::lookup_metadata(me.tx.clone(), cfg, info));
+            // `INTACT_BITSTREAM_DEMO_STAY` : reste sur l'écran du disque.
+            if std::env::var_os("INTACT_BITSTREAM_DEMO_STAY").is_some() {
+                return;
+            }
             let me = me.clone();
             glib::timeout_add_seconds_local_once(12, move || {
                 let output = me.output_path().unwrap_or_else(|| "/tmp/demo.mkv".into());
@@ -244,16 +252,7 @@ impl App {
         self.ui.retry_btn.connect_clicked(move |_| me.start_setup());
 
         let me = self.clone();
-        self.ui.refresh_btn.connect_clicked(move |_| {
-            let dev = {
-                let s = me.state.borrow();
-                s.device.clone().or_else(|| s.loaded_drives.iter().next().cloned())
-            };
-            match dev {
-                Some(d) => me.start_analysis(d),
-                None => me.toast("Aucun disque détecté"),
-            }
-        });
+        self.ui.refresh_btn.connect_clicked(move |_| me.reanalyze());
 
         let me = self.clone();
         self.ui.title_combo.connect_selected_notify(move |row| {
@@ -333,6 +332,7 @@ impl App {
         let me = self.clone();
         self.ui.window.connect_close_request(move |_| {
             // Annule proprement un rip en cours (le garde restaure la config MakeMKV).
+            me.stop_remote();
             let mut s = me.state.borrow_mut();
             for c in [&s.rip_cancel, &s.analysis_cancel].into_iter().flatten() {
                 c.cancel();
@@ -510,10 +510,15 @@ impl App {
             AppEvent::Extracted { id, result } => self.on_extracted(id, result),
             AppEvent::RipProgress { phase, label, fraction, estimate } => self.show_rip_progress(phase, &label, fraction, estimate),
             AppEvent::RipFinished(res) => self.on_rip_finished(res),
+            AppEvent::Remote(cmd) => self.on_remote(cmd),
+            AppEvent::RemoteQuery(reply) => {
+                let _ = reply.send(self.snapshot());
+            }
         }
     }
 
     fn toast(&self, msg: &str) {
+        self.remote_notice(msg);
         self.ui.toasts.add_toast(adw::Toast::new(msg));
     }
 
@@ -614,6 +619,18 @@ impl App {
         };
         if !(disc && loaded) {
             self.show_nodisc();
+        }
+    }
+
+    /// Nouvelle analyse du disque courant (bouton « Actualiser »).
+    fn reanalyze(self: &Rc<Self>) {
+        let dev = {
+            let s = self.state.borrow();
+            s.device.clone().or_else(|| s.loaded_drives.iter().next().cloned())
+        };
+        match dev {
+            Some(d) => self.start_analysis(d),
+            None => self.toast("Aucun disque détecté"),
         }
     }
 
@@ -1141,23 +1158,28 @@ impl App {
         glib::spawn_future_local(async move {
             if let Ok(folder) = dialog.select_folder_future(Some(&me.ui.window)).await {
                 if let Some(path) = folder.path() {
-                    me.ui.folder_row.set_subtitle(&path.display().to_string());
-                    // Le dernier dossier choisi devient la destination par défaut.
-                    let cfg = {
-                        let mut s = me.state.borrow_mut();
-                        s.output_dir = path.clone();
-                        s.cfg.output_dir = path;
-                        s.cfg.clone()
-                    };
-                    if let Err(e) = cfg.save() {
-                        me.toast(&format!("Dossier non mémorisé : {e}"));
-                    }
-                    // Nouvelle destination : on y prépare l'extraction si rien n'est en cours.
-                    let idx = me.state.borrow().title_index;
-                    me.prepare_extraction(idx);
+                    me.set_output_dir(path);
                 }
             }
         });
+    }
+
+    /// Nouveau dossier de destination (fenêtre de choix ou télécommande).
+    fn set_output_dir(self: &Rc<Self>, path: PathBuf) {
+        self.ui.folder_row.set_subtitle(&path.display().to_string());
+        // Le dernier dossier choisi devient la destination par défaut.
+        let cfg = {
+            let mut s = self.state.borrow_mut();
+            s.output_dir = path.clone();
+            s.cfg.output_dir = path;
+            s.cfg.clone()
+        };
+        if let Err(e) = cfg.save() {
+            self.toast(&format!("Dossier non mémorisé : {e}"));
+        }
+        // Nouvelle destination : on y prépare l'extraction si rien n'est en cours.
+        let idx = self.state.borrow().title_index;
+        self.prepare_extraction(idx);
     }
 
     // ------------------------------------------------------------------
@@ -1217,6 +1239,7 @@ impl App {
             s.title_index
         };
         self.set_ripping_ui(true);
+        self.remote_rip_started();
         append_log(&self.ui.log_view, &format!("▶ Rip vers {}", output.display()));
         {
             let mut s = self.state.borrow_mut();
@@ -1268,6 +1291,7 @@ impl App {
             Some(e) => format!("{label} · {}", crate::progress::describe(e)),
             None => label.to_string(),
         });
+        self.remote_progress(phase, label, fraction, estimate.as_ref());
         self.ui.rip_view.update(phase, label, fraction, estimate);
         self.ui.launcher.set_progress(Some(fraction));
     }
@@ -1455,16 +1479,21 @@ impl App {
         let me = self.clone();
         glib::spawn_future_local(async move {
             if me.ask("Annuler le rip ?", "Le fichier partiel sera supprimé.", "Annuler le rip").await {
-                let s = me.state.borrow();
-                if let Some(c) = s.rip_cancel.as_ref() {
-                    c.cancel();
-                }
-                // Extraction encore en cours : son annulation terminera le rip.
-                if let Some(e) = s.extraction.as_ref().filter(|e| e.result.is_none() && s.pending_output.is_some()) {
-                    e.cancel.cancel();
-                }
+                me.abort_rip();
             }
         });
+    }
+
+    /// Annule le rip en cours, sans confirmation.
+    fn abort_rip(&self) {
+        let s = self.state.borrow();
+        if let Some(c) = s.rip_cancel.as_ref() {
+            c.cancel();
+        }
+        // Extraction encore en cours : son annulation terminera le rip.
+        if let Some(e) = s.extraction.as_ref().filter(|e| e.result.is_none() && s.pending_output.is_some()) {
+            e.cancel.cancel();
+        }
     }
 
     fn set_ripping_ui(&self, ripping: bool) {
@@ -1506,6 +1535,13 @@ impl App {
                     (s.rip_started.take().map(|t| t.elapsed()).unwrap_or_default(), secs, s.movie.clone())
                 };
                 self.ui.rip_view.finish(&self.display_title(), &file_name, size, film_secs, elapsed);
+                self.remote_rip_finished(Some(remote::RipResult {
+                    ok: true,
+                    file: file_name.clone(),
+                    size: format!("{:.1} Go", size as f64 / 1e9).replace('.', ","),
+                    elapsed: crate::progress::short_duration(elapsed),
+                    error: None,
+                }));
                 self.ui.action_zone.set_visible(false);
                 let entry = history::Entry {
                     title: self.ui.movie_entry.text().trim().to_string(),
@@ -1527,12 +1563,14 @@ impl App {
                 }
             }
             Err(e) if e.contains("annulée") => {
+                self.remote_rip_finished(None);
                 append_log(&self.ui.log_view, "Rip annulé.");
                 self.ui.progress_bar.set_fraction(0.0);
                 self.ui.progress_bar.set_text(Some("Annulé"));
                 self.toast("Rip annulé");
             }
             Err(e) => {
+                self.remote_rip_finished(Some(remote::RipResult { ok: false, error: Some(e.clone()), ..Default::default() }));
                 append_log(&self.ui.log_view, &format!("✖ {e}"));
                 self.ui.progress_bar.set_text(Some("Échec"));
                 let d = adw::AlertDialog::new(Some("Le rip a échoué"), Some(&e));
@@ -1581,6 +1619,7 @@ impl App {
                 let idx = me.state.borrow().title_index;
                 me.select_title(idx);
             }
+            me.apply_remote_config();
         });
     }
 }
@@ -1602,6 +1641,16 @@ fn audio_extras(s: &crate::makemkv::disc::Stream) -> String {
 
 /// Pastilles colorées : format (DTS, AC3, TrueHD…) et canaux (5.1, 2.0…).
 fn codec_chips(s: &crate::makemkv::disc::Stream) -> Vec<gtk::Label> {
+    let (label, class, layout) = codec_text(s);
+    let mut chips = vec![gtk::Label::builder().label(label.as_str()).valign(gtk::Align::Center).css_classes(["codec", class]).build()];
+    if !layout.is_empty() {
+        chips.push(gtk::Label::builder().label(&layout).valign(gtk::Align::Center).css_classes(["codec", "layout"]).build());
+    }
+    chips
+}
+
+/// Format (DTS, AC3, TrueHD…), classe CSS de sa couleur et canaux (5.1…).
+fn codec_text(s: &crate::makemkv::disc::Stream) -> (String, &'static str, String) {
     let id = s.codec_id();
     let codec = s.codec();
     let class = if id.contains("TRUEHD") {
@@ -1623,7 +1672,6 @@ fn codec_chips(s: &crate::makemkv::disc::Stream) -> Vec<gtk::Label> {
         _ if codec.is_empty() => id,
         _ => codec,
     };
-    let mut chips = vec![gtk::Label::builder().label(label).valign(gtk::Align::Center).css_classes(["codec", class]).build()];
     let layout = match s.channels() {
         0 => String::new(),
         1 => "1.0".into(),
@@ -1632,10 +1680,7 @@ fn codec_chips(s: &crate::makemkv::disc::Stream) -> Vec<gtk::Label> {
         8 => "7.1".into(),
         n => format!("{n} canaux"),
     };
-    if !layout.is_empty() {
-        chips.push(gtk::Label::builder().label(&layout).valign(gtk::Align::Center).css_classes(["codec", "layout"]).build());
-    }
-    chips
+    (label.to_string(), class, layout)
 }
 
 /// Découpe le nom de fichier en blocs colorés : titre, année, identifiant

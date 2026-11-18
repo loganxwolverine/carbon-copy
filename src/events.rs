@@ -50,6 +50,10 @@ pub enum AppEvent {
     RipProgress { phase: Phase, label: String, fraction: f64, estimate: Option<Estimate> },
     /// Fin du rip.
     RipFinished(Result<PathBuf, String>),
+    /// Télécommande web : action à exécuter comme le bouton correspondant.
+    Remote(crate::remote::Command),
+    /// Télécommande web : demande de l'état courant.
+    RemoteQuery(tokio::sync::oneshot::Sender<crate::remote::Snapshot>),
 }
 
 pub type Tx = async_channel::Sender<AppEvent>;

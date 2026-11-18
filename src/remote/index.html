@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d1d20">
+<title>Intact Bitstream</title>
+<style>
+  :root {
+    --bg: #1d1d20; --card: #2a2a2e; --card2: #333338; --fg: #f2f2f4; --muted: #a8a8b0;
+    --line: #3d3d43; --blue: #3584e4; --violet: #9141ac; --orange: #ff7800;
+    --green: #2ec27e; --green-fg: #57e389; --red: #e01b24; --yellow: #f5c211;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Cantarell, sans-serif; }
+  body { padding: 0 16px calc(24px + env(safe-area-inset-bottom)); max-width: 720px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 10px; padding: 14px 0 10px; }
+  header h1 { font-size: 1.05rem; margin: 0; font-weight: 800; letter-spacing: .2px; }
+  header .status { margin-left: auto; color: var(--muted); font-size: .85rem; text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+  header .ej { flex: none; border: 0; border-radius: 99px; padding: 7px 12px; background: var(--card2); color: var(--fg);
+    font: 700 .85rem system-ui, sans-serif; cursor: pointer; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); flex: none; }
+  .dot.off { background: var(--red); }
+  .card { background: var(--card); border-radius: 16px; padding: 16px; margin: 12px 0; }
+  .center { text-align: center; }
+  .big { font-size: 1.35rem; font-weight: 800; margin: 4px 0; }
+  .muted { color: var(--muted); }
+  .small { font-size: .85rem; }
+  .hidden { display: none !important; }
+  .movie { display: flex; gap: 14px; }
+  .poster { width: 104px; flex: none; aspect-ratio: 2/3; border-radius: 10px; object-fit: cover;
+    background: var(--card2); }
+  .movie .info { min-width: 0; }
+  .movie h2 { margin: 0 0 4px; font-size: 1.25rem; line-height: 1.2; }
+  .overview { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+    font-size: .9rem; color: var(--muted); margin-top: 6px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip { font-size: .8rem; padding: 2px 9px; border-radius: 99px; background: var(--card2); }
+  .chip.audio { background: rgba(255,120,0,.22); }
+  .chip.subs { background: rgba(192,97,203,.25); }
+  .chip.kind { background: rgba(53,132,228,.28); font-weight: 700; }
+  h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; }
+  .titles { display: flex; flex-direction: column; gap: 6px; }
+  .title-btn { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    background: var(--card2); color: var(--fg); border: 2px solid transparent; border-radius: 12px;
+    padding: 10px 12px; font: inherit; cursor: pointer; }
+  .title-btn.sel { border-color: var(--blue); background: rgba(53,132,228,.18); }
+  .title-btn .t { font-weight: 700; white-space: nowrap; }
+  .title-btn .d { color: var(--muted); font-size: .85rem; }
+  .title-btn .star { margin-left: auto; color: var(--yellow); font-size: .8rem; font-weight: 700; white-space: nowrap; }
+  .file { font-family: ui-monospace, monospace; font-size: .8rem; word-break: break-all;
+    background: rgba(245,194,17,.12); padding: 8px 10px; border-radius: 10px; }
+  button.main { width: 100%; border: 0; border-radius: 14px; padding: 16px; font: 800 1.1rem system-ui, sans-serif;
+    color: white; background: linear-gradient(120deg, var(--blue), var(--violet) 60%, var(--red)); cursor: pointer;
+    box-shadow: 0 3px 12px rgba(145,65,172,.4); }
+  button.main:disabled { opacity: .45; box-shadow: none; }
+  button.main.cancel { background: linear-gradient(120deg, #c01c28, #a51d2d); box-shadow: none; }
+  .row { display: flex; gap: 10px; margin-top: 10px; }
+  button.sec { flex: 1; border: 0; border-radius: 12px; padding: 12px; font: 600 .95rem system-ui, sans-serif;
+    color: var(--fg); background: var(--card2); cursor: pointer; }
+  .bar { height: 12px; border-radius: 99px; background: var(--card2); overflow: hidden; margin: 10px 0 6px; }
+  .bar > div { height: 100%; width: 0; border-radius: 99px; transition: width .6s ease;
+    background: linear-gradient(90deg, var(--blue), var(--violet), var(--orange)); }
+  .bar.pulse > div { width: 35% !important; animation: pulse 1.4s ease-in-out infinite alternate; }
+  @keyframes pulse { from { margin-left: 0; } to { margin-left: 65%; } }
+  .pct { font-size: 2.6rem; font-weight: 800; line-height: 1; }
+  .stats { display: flex; justify-content: center; gap: 18px; color: var(--muted); font-size: .9rem; margin-top: 6px; }
+  .steps { display: flex; gap: 6px; margin-top: 14px; }
+  .step { flex: 1; text-align: center; font-size: .75rem; padding: 6px 2px; border-radius: 8px;
+    background: var(--card2); color: var(--muted); }
+  .step.active { background: rgba(53,132,228,.32); color: var(--fg); font-weight: 700; }
+  .step.done { background: rgba(46,194,126,.25); color: var(--fg); }
+  .done-title { font-size: 1.8rem; font-weight: 800; color: var(--green-fg); }
+  .err { color: #ff7b7b; }
+  .history { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+  .history .h img, .history .h .ph { width: 100%; aspect-ratio: 2/3; border-radius: 8px; object-fit: cover; background: var(--card2); display: block; }
+  .history .h .n { font-size: .78rem; margin-top: 4px; line-height: 1.25; }
+  .spinner { width: 42px; height: 42px; margin: 8px auto; border-radius: 50%; border: 4px solid var(--card2);
+    border-top-color: var(--blue); animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  details { margin: 12px 0; }
+  summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: .72rem; line-height: 1.35; color: #c8c8d0;
+    background: #141416; border-radius: 10px; padding: 10px; max-height: 50vh; overflow: auto; }
+  .link { background: none; border: 0; color: #78aeed; font: 600 .9rem system-ui, sans-serif; padding: 6px 0; cursor: pointer; }
+  .head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .head h3 { margin: 0; }
+  .tracks { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 14px; }
+  .track { display: flex; align-items: center; gap: 12px; background: var(--card2); border-radius: 12px;
+    padding: 10px 12px; cursor: pointer; border: 2px solid transparent; user-select: none; }
+  .track.on { border-color: rgba(53,132,228,.7); background: rgba(53,132,228,.14); }
+  .track input { width: 22px; height: 22px; flex: none; accent-color: var(--blue); pointer-events: none; }
+  .track .l { flex: 1; min-width: 0; }
+  .track .l .n { font-weight: 700; }
+  .track .l .x { color: var(--muted); font-size: .8rem; }
+  .track .c { font-size: .78rem; padding: 2px 8px; border-radius: 99px; background: rgba(255,120,0,.22); white-space: nowrap; }
+  .track .c.f { background: rgba(53,132,228,.32); }
+  .folder { font-family: ui-monospace, monospace; font-size: .8rem; word-break: break-all; }
+  input[type=text], input[type=search], input[type=number] { width: 100%; background: #141416; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; font: 16px system-ui, sans-serif; }
+  .fields { display: flex; gap: 8px; }
+  .fields .y { width: 92px; flex: none; }
+  button.ok { border: 0; border-radius: 10px; padding: 11px 16px; font: 700 .95rem system-ui, sans-serif;
+    color: white; background: var(--blue); cursor: pointer; white-space: nowrap; }
+  .sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 10; display: flex; align-items: flex-end; justify-content: center; }
+  .sheet > div { background: var(--bg); width: 100%; max-width: 720px; max-height: 92vh; overflow: auto;
+    border-radius: 18px 18px 0 0; padding: 14px 16px calc(20px + env(safe-area-inset-bottom)); }
+  .sheet .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .sheet .top b { font-size: 1.1rem; }
+  .results { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .res { display: flex; gap: 12px; background: var(--card); border-radius: 12px; padding: 8px; cursor: pointer; text-align: left;
+    border: 0; color: var(--fg); font: inherit; width: 100%; }
+  .res img, .res .ph { width: 54px; aspect-ratio: 2/3; border-radius: 6px; object-fit: cover; background: var(--card2); flex: none; }
+  .res .o { font-size: .8rem; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .dirs { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+  .dir { text-align: left; background: var(--card); color: var(--fg); border: 0; border-radius: 10px; padding: 12px; font: inherit; cursor: pointer; }
+  #toast { z-index: 20; position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    background: #454550; color: var(--fg); padding: 10px 16px; border-radius: 12px; max-width: calc(100% - 32px);
+    box-shadow: 0 4px 16px rgba(0,0,0,.4); opacity: 0; transition: opacity .3s; pointer-events: none; font-size: .9rem; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>Intact Bitstream</h1>
+  <span class="status" id="status"></span>
+  <button class="ej hidden" id="eject-top" data-act="eject">⏏ Éjecter</button>
+</header>
+
+<!-- Connexion perdue -->
+<section id="v-offline" class="card center hidden">
+  <div class="big">Application injoignable</div>
+  <p class="muted">Intact Bitstream est-elle lancée sur le HTPC ? Nouvelle tentative automatique…</p>
+</section>
+
+<!-- Démarrage -->
+<section id="v-setup" class="card center">
+  <div class="spinner"></div>
+  <div class="big">Démarrage…</div>
+  <p class="muted" id="setup-text"></p>
+</section>
+
+<!-- Erreur -->
+<section id="v-error" class="card hidden">
+  <div class="big err">Erreur</div>
+  <p id="error-text"></p>
+  <div class="row"><button class="sec" data-act="analyze">Analyser de nouveau</button></div>
+</section>
+
+<!-- Pas de disque -->
+<section id="v-nodisc" class="hidden">
+  <div class="card center">
+    <div style="font-size:2.4rem">💿</div>
+    <div class="big">Insérez un disque</div>
+    <p class="muted">L'analyse démarre toute seule.</p>
+  </div>
+  <div class="card" id="history-card">
+    <h3>Derniers rips</h3>
+    <div class="history" id="history"></div>
+  </div>
+</section>
+
+<!-- Analyse -->
+<section id="v-analysis" class="card center hidden">
+  <div class="big">Analyse du disque</div>
+  <div class="bar" id="analysis-bar"><div></div></div>
+  <div class="muted small" id="analysis-label"></div>
+</section>
+
+<!-- Disque prêt -->
+<section id="v-disc" class="hidden">
+  <div class="card">
+    <div class="movie">
+      <img class="poster" id="d-poster" alt="">
+      <div class="info">
+        <h2 id="d-title"></h2>
+        <div class="chips"><span class="chip kind" id="d-kind"></span></div>
+        <div class="muted small" id="d-name" style="margin-top:6px"></div>
+        <div class="overview" id="d-overview"></div>
+        <button class="link" id="movie-edit">✎ Modifier la fiche</button>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Titre à ripper</h3>
+    <div class="titles" id="d-titles"></div>
+  </div>
+  <div class="card">
+    <h3 id="h-audio">Audio</h3>
+    <div class="tracks" id="d-audio"></div>
+    <h3 id="h-subs">Sous-titres</h3>
+    <div class="tracks" id="d-subs"></div>
+    <div class="muted small" id="d-prepare"></div>
+  </div>
+  <div class="card">
+    <div class="head"><h3>Destination</h3><button class="link" id="folder-edit">Changer</button></div>
+    <div class="folder muted" id="d-folder"></div>
+    <h3 style="margin-top:14px">Fichier</h3>
+    <div class="file" id="d-file"></div>
+  </div>
+  <button class="main" id="rip-btn" data-act="rip">Lancer le rip</button>
+  <div class="row"><button class="sec" data-act="analyze">Analyser de nouveau</button></div>
+</section>
+
+<!-- Rip en cours -->
+<section id="v-rip" class="hidden">
+  <div class="card">
+    <div class="movie">
+      <img class="poster" id="r-poster" alt="">
+      <div class="info">
+        <h2 id="r-title"></h2>
+        <div class="muted small" id="r-file" style="word-break:break-all"></div>
+      </div>
+    </div>
+  </div>
+  <div class="card center">
+    <div class="pct" id="r-pct">0 %</div>
+    <div class="bar"><div id="r-bar"></div></div>
+    <div id="r-label" class="small"></div>
+    <div class="stats"><span id="r-speed"></span><span id="r-eta"></span></div>
+    <div class="steps">
+      <div class="step" data-phase="copy">Copie</div>
+      <div class="step" data-phase="verify">Vérification</div>
+      <div class="step" data-phase="finalize">Finalisation</div>
+      <div class="step" data-phase="eject">Éjection</div>
+    </div>
+  </div>
+  <button class="main cancel" data-act="cancel">Annuler le rip</button>
+</section>
+
+<!-- Rip terminé -->
+<section id="v-done" class="hidden">
+  <div class="card center">
+    <div class="done-title">✔ Copie terminée</div>
+    <p id="done-file" class="file" style="text-align:left"></p>
+    <p class="muted" id="done-stats"></p>
+  </div>
+  <button class="main" data-act="next">Disque suivant</button>
+</section>
+
+<!-- Échec du dernier rip -->
+<section id="v-failed" class="card hidden">
+  <div class="big err">Le rip a échoué</div>
+  <p id="failed-text"></p>
+</section>
+
+<!-- Fiche du film -->
+<div class="sheet hidden" id="sheet-movie"><div>
+  <div class="top"><b>Fiche du film</b><button class="link" data-close>Fermer</button></div>
+  <div id="m-search-box">
+    <h3>Rechercher sur TMDB</h3>
+    <form id="m-search" class="fields">
+      <input type="search" id="m-q" placeholder="Titre, identifiant ou lien TMDB" enterkeyhint="search">
+      <input type="number" id="m-y" class="y" placeholder="Année" inputmode="numeric">
+    </form>
+    <div class="row" style="margin-top:8px"><button class="ok" style="flex:1" form="m-search">Rechercher</button></div>
+    <div class="results" id="m-results"></div>
+  </div>
+  <p class="muted small hidden" id="m-nokey">Recherche TMDB indisponible : la clé API n'est pas configurée dans l'application.</p>
+  <h3 style="margin-top:20px">Film absent de TMDB : saisie manuelle</h3>
+  <form id="m-manual">
+    <div class="fields">
+      <input type="text" id="m-title" placeholder="Titre">
+      <input type="number" id="m-year" class="y" placeholder="Année" inputmode="numeric">
+    </div>
+    <div class="row"><button class="sec">Appliquer ce titre</button></div>
+  </form>
+</div></div>
+
+<!-- Dossier de destination -->
+<div class="sheet hidden" id="sheet-folder"><div>
+  <div class="top"><b>Dossier de destination</b><button class="link" data-close>Fermer</button></div>
+  <div class="folder" id="f-path"></div>
+  <div class="row"><button class="sec" id="f-up">⬆ Dossier parent</button><button class="sec" id="f-home">⌂ Accueil</button></div>
+  <div class="dirs" id="f-dirs"></div>
+  <form id="f-new" class="fields"><input type="text" id="f-name" placeholder="Nouveau dossier"><button class="ok">Créer</button></form>
+  <button class="main" id="f-choose" style="margin-top:14px">Choisir ce dossier</button>
+</div></div>
+
+<details>
+  <summary>Journal</summary>
+  <pre id="log"></pre>
+</details>
+<p class="muted small center" id="version"></p>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const views = ["offline", "setup", "error", "nodisc", "analysis", "disc", "rip", "done"];
+let lastNotice = null, lastHistory = 0, busy = false;
+
+function show(name) {
+  for (const v of views) $("v-" + v).classList.toggle("hidden", v !== name);
+}
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove("show"), 4000);
+}
+function pct(f) { return (Math.round(f * 1000) / 10).toLocaleString("fr-FR") + " %"; }
+function setPoster(img, url) {
+  if (url) { if (img.getAttribute("src") !== url) img.src = url; img.style.display = ""; }
+  else { img.removeAttribute("src"); img.style.display = "none"; }
+}
+function movieTitle(m) { return m ? (m.year ? `${m.title} (${m.year})` : m.title) || "Film inconnu" : ""; }
+
+async function post(path, body) {
+  let r = null;
+  try {
+    const headers = { "X-Intact": "1" };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    r = await fetch(path, { method: "POST", headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    if (!r.ok) toast((await r.text()) || "Action refusée (" + r.status + ")");
+  } catch (e) { toast("Application injoignable"); }
+  setTimeout(refresh, 250);
+  return r;
+}
+let state = null;
+
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-act]");
+  if (!b) return;
+  const act = b.dataset.act;
+  if (act === "cancel" && !confirm("Annuler le rip ? Le fichier partiel sera supprimé.")) return;
+  if (act === "eject" && !confirm("Éjecter le disque ?")) return;
+  post("/api/" + act);
+});
+
+function renderTitles(d) {
+  const box = $("d-titles");
+  box.textContent = "";
+  for (const t of d.titles) {
+    const b = document.createElement("button");
+    b.className = "title-btn" + (t.index === d.title_index ? " sel" : "");
+    b.innerHTML = `<span class="t"></span><span class="d"></span>${t.main ? '<span class="star">★ principal</span>' : ""}`;
+    b.querySelector(".t").textContent = "Titre " + t.index;
+    b.querySelector(".d").textContent = `${t.duration} · ${t.chapters} chap. · ${t.size}`;
+    b.onclick = () => { if (t.index !== d.title_index) post("/api/title/" + t.index); };
+    box.appendChild(b);
+  }
+}
+// Pistes : reconstruites seulement si elles changent (pas à chaque seconde).
+let tracksKey = "";
+function renderTracks(d) {
+  const key = JSON.stringify([d.title_index, d.tracks]);
+  if (key === tracksKey) return;
+  tracksKey = key;
+  for (const sub of [false, true]) {
+    const box = $(sub ? "d-subs" : "d-audio");
+    box.textContent = "";
+    const list = d.tracks.filter((t) => t.subtitle === sub);
+    const n = list.filter((t) => t.selected).length;
+    $(sub ? "h-subs" : "h-audio").textContent = (sub ? "Sous-titres" : "Audio") + ` · ${n} / ${list.length}`;
+    if (!list.length) {
+      box.innerHTML = '<div class="muted small">Aucune piste</div>';
+      continue;
+    }
+    for (const t of list) {
+      const el = document.createElement("div");
+      el.className = "track" + (t.selected ? " on" : "");
+      el.innerHTML = '<input type="checkbox" tabindex="-1"><div class="l"><div class="n"></div><div class="x"></div></div>';
+      el.querySelector("input").checked = t.selected;
+      el.querySelector(".n").textContent = t.lang + (t.forced ? " — forcés" : "");
+      el.querySelector(".x").textContent = sub
+        ? (t.forced ? "passages en langue étrangère" : "sous-titres complets")
+        : t.extras;
+      for (const [txt, cls] of [[t.codec, ""], [t.layout, ""], [t.forced ? "forcé" : "", "f"]]) {
+        if (!txt) continue;
+        const c = document.createElement("span");
+        c.className = "c " + cls;
+        c.textContent = txt;
+        el.appendChild(c);
+      }
+      el.onclick = () => {
+        // Retour immédiat ; l'état réel arrive au rafraîchissement suivant.
+        const on = !t.selected;
+        el.classList.toggle("on", on);
+        el.querySelector("input").checked = on;
+        tracksKey = "";
+        post("/api/track", { subtitle: sub, index: t.index, on });
+      };
+      box.appendChild(el);
+    }
+  }
+}
+
+// ---- Fiche du film ----
+function openSheet(id) { $(id).classList.remove("hidden"); document.body.style.overflow = "hidden"; }
+function closeSheets() { document.querySelectorAll(".sheet").forEach((e) => e.classList.add("hidden")); document.body.style.overflow = ""; }
+document.querySelectorAll("[data-close]").forEach((b) => b.onclick = closeSheets);
+document.querySelectorAll(".sheet").forEach((sh) => sh.addEventListener("click", (e) => { if (e.target === sh) closeSheets(); }));
+
+$("movie-edit").onclick = () => {
+  const m = (state && state.movie) || {};
+  $("m-q").value = m.title || "";
+  $("m-y").value = m.year || "";
+  $("m-title").value = m.title || "";
+  $("m-year").value = m.year || "";
+  $("m-results").textContent = "";
+  const ready = state && state.tmdb_ready;
+  $("m-search-box").classList.toggle("hidden", !ready);
+  $("m-nokey").classList.toggle("hidden", !!ready);
+  openSheet("sheet-movie");
+  if (ready && m.title) searchMovie();
+};
+async function searchMovie() {
+  const box = $("m-results");
+  const q = $("m-q").value.trim();
+  if (!q) return;
+  box.innerHTML = '<div class="spinner"></div>';
+  try {
+    const r = await fetch("/api/search?" + new URLSearchParams({ q, year: $("m-y").value.trim() }));
+    if (!r.ok) { box.innerHTML = ""; const p = document.createElement("p"); p.className = "err"; p.textContent = await r.text(); box.appendChild(p); return; }
+    const items = await r.json();
+    box.textContent = "";
+    if (!items.length) { box.innerHTML = '<p class="muted">Aucun résultat. Essayez le titre original, sans année, ou le lien themoviedb.org.</p>'; return; }
+    for (const it of items) {
+      const b = document.createElement("button");
+      b.className = "res";
+      b.innerHTML = (it.poster ? '<img loading="lazy" alt="">' : '<div class="ph"></div>') + '<div><div class="n" style="font-weight:700"></div><div class="o small muted"></div><div class="o"></div></div>';
+      if (it.poster) b.querySelector("img").src = it.poster;
+      b.querySelector(".n").textContent = it.year ? `${it.title} (${it.year})` : it.title;
+      const os = b.querySelectorAll(".o");
+      os[0].textContent = [it.original_title !== it.title ? it.original_title : "", "TMDB " + it.id].filter(Boolean).join(" · ");
+      os[1].textContent = it.overview;
+      b.onclick = async () => {
+        closeSheets();
+        const r = await post("/api/movie", { tmdb: String(it.id) });
+        if (r && r.ok) toast("Film choisi : " + it.title);
+      };
+      box.appendChild(b);
+    }
+  } catch (e) { box.innerHTML = '<p class="err">Application injoignable</p>'; }
+}
+$("m-search").onsubmit = (e) => { e.preventDefault(); searchMovie(); };
+$("m-manual").onsubmit = async (e) => {
+  e.preventDefault();
+  const title = $("m-title").value.trim();
+  if (!title) { toast("Saisissez un titre"); return; }
+  const y = parseInt($("m-year").value, 10);
+  closeSheets();
+  await post("/api/movie", { title, year: Number.isFinite(y) ? y : null });
+};
+
+// ---- Dossier de destination ----
+let folder = null;
+async function browse(path) {
+  const box = $("f-dirs");
+  box.innerHTML = '<div class="spinner"></div>';
+  try {
+    const r = await fetch("/api/dirs?" + new URLSearchParams(path ? { path } : {}));
+    if (!r.ok) { box.textContent = ""; toast(await r.text()); if (!folder) folder = { path: path || "" }; return; }
+    folder = await r.json();
+  } catch (e) { box.textContent = ""; toast("Application injoignable"); return; }
+  $("f-path").textContent = folder.path;
+  $("f-up").disabled = !folder.parent;
+  box.textContent = "";
+  if (!folder.dirs.length) box.innerHTML = '<div class="muted small">Aucun sous-dossier</div>';
+  for (const name of folder.dirs) {
+    const b = document.createElement("button");
+    b.className = "dir";
+    b.textContent = "📁 " + name;
+    b.onclick = () => browse(folder.path.replace(/\/$/, "") + "/" + name);
+    box.appendChild(b);
+  }
+}
+$("folder-edit").onclick = () => { $("f-name").value = ""; openSheet("sheet-folder"); browse(state && state.output_dir); };
+$("f-up").onclick = () => folder && folder.parent && browse(folder.parent);
+$("f-home").onclick = () => browse(folder && folder.home);
+$("f-new").onsubmit = async (e) => {
+  e.preventDefault();
+  const name = $("f-name").value.trim();
+  if (!name || !folder) return;
+  const r = await post("/api/mkdir", { parent: folder.path, name });
+  if (r && r.ok) { $("f-name").value = ""; browse((await r.json()).path); }
+};
+$("f-choose").onclick = () => {
+  if (!folder) return;
+  closeSheets();
+  post("/api/folder", { path: folder.path });
+};
+
+async function loadHistory() {
+  lastHistory = Date.now();
+  try {
+    const items = await (await fetch("/api/history")).json();
+    const box = $("history");
+    box.textContent = "";
+    $("history-card").classList.toggle("hidden", !items.length);
+    for (const it of items) {
+      const el = document.createElement("div");
+      el.className = "h";
+      el.innerHTML = it.poster ? '<img loading="lazy" alt="">' : '<div class="ph"></div>';
+      if (it.poster) el.querySelector("img").src = it.poster;
+      const n = document.createElement("div");
+      n.className = "n";
+      n.textContent = (it.year ? `${it.title} (${it.year})` : it.title) + " · " + it.date;
+      el.appendChild(n);
+      box.appendChild(el);
+    }
+  } catch (e) { /* réessai au prochain passage */ }
+}
+
+function render(s) {
+  state = s;
+  // Éjection possible partout, sauf pendant un rip.
+  $("eject-top").classList.toggle("hidden", s.ripping || s.screen === "setup");
+  $("dot").classList.remove("off");
+  $("status").textContent = s.status || "";
+  $("version").textContent = "Intact Bitstream " + s.version + " · télécommande web";
+  const log = $("log");
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  log.textContent = s.log.join("\n");
+  if (atBottom) log.scrollTop = log.scrollHeight;
+
+  if (s.notice && s.notice.id !== lastNotice) {
+    if (lastNotice !== null) toast(s.notice.text);
+    lastNotice = s.notice.id;
+  }
+
+  const failed = s.result && !s.result.ok && s.screen !== "rip";
+  $("v-failed").classList.toggle("hidden", !failed);
+  if (failed) $("failed-text").textContent = s.result.error || "";
+
+  switch (s.screen) {
+    case "setup": $("setup-text").textContent = s.status; break;
+    case "error": $("error-text").textContent = s.error || ""; break;
+    case "nodisc": if (Date.now() - lastHistory > 30000) loadHistory(); break;
+    case "analysis": {
+      const a = s.analysis || {};
+      const bar = $("analysis-bar");
+      const f = a.fraction || 0;
+      bar.classList.toggle("pulse", !(f > 0));
+      bar.firstElementChild.style.width = (f * 100) + "%";
+      $("analysis-label").textContent = a.label || "";
+      break;
+    }
+    case "disc": {
+      const d = s.disc, m = s.movie;
+      if (!d) break;
+      $("d-title").textContent = movieTitle(m) || "Recherche du film…";
+      setPoster($("d-poster"), m && m.poster);
+      $("d-kind").textContent = d.kind;
+      $("d-name").textContent = d.name;
+      $("d-overview").textContent = (m && m.overview) || (m && !m.identified ? "Non identifié sur TMDB." : "");
+      $("d-folder").textContent = s.output_dir;
+      renderTitles(d);
+      renderTracks(d);
+      $("d-file").textContent = s.filename || "—";
+      const p = s.progress;
+      $("d-prepare").textContent = p ? p.label : "";
+      $("rip-btn").disabled = !s.can_rip;
+      break;
+    }
+    case "rip": {
+      const p = s.progress || { fraction: 0, label: "Démarrage…", phase: "copy" };
+      $("r-title").textContent = movieTitle(s.movie);
+      setPoster($("r-poster"), s.movie && s.movie.poster);
+      $("r-file").textContent = s.filename;
+      $("r-pct").textContent = pct(p.fraction);
+      $("r-bar").style.width = (p.fraction * 100) + "%";
+      $("r-label").textContent = p.label;
+      $("r-speed").textContent = p.speed || "";
+      $("r-eta").textContent = p.remaining ? "reste " + p.remaining : "";
+      const order = ["copy", "verify", "finalize", "eject"];
+      const cur = order.indexOf(p.phase);
+      document.querySelectorAll(".step").forEach((el) => {
+        const i = order.indexOf(el.dataset.phase);
+        el.classList.toggle("active", i === cur);
+        el.classList.toggle("done", i < cur);
+      });
+      break;
+    }
+    case "done": {
+      const r = s.result || {};
+      $("done-file").textContent = r.file || s.filename;
+      $("done-stats").textContent = [r.size, r.elapsed && "en " + r.elapsed].filter(Boolean).join(" · ");
+      break;
+    }
+  }
+  // Les fenêtres de modification n'ont de sens que sur l'écran du disque.
+  if (s.screen !== "disc" || s.ripping) closeSheets();
+  show(views.includes(s.screen) ? s.screen : "setup");
+}
+
+async function refresh() {
+  if (busy) return;
+  busy = true;
+  try {
+    const r = await fetch("/api/state", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    render(await r.json());
+  } catch (e) {
+    $("dot").classList.add("off");
+    $("eject-top").classList.add("hidden");
+    $("status").textContent = "";
+    show("offline");
+  } finally {
+    busy = false;
+  }
+}
+
+refresh();
+setInterval(refresh, 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+</script>
+</body>
+</html>

@@ -115,6 +115,51 @@ pub fn show(parent: &adw::ApplicationWindow, cfg: Config, tx: Tx, on_close: impl
         });
     }
 
+    // --- Télécommande web ---------------------------------------------------
+    let remote_group = adw::PreferencesGroup::builder()
+        .title("Télécommande web")
+        .description(
+            "Suivre et lancer un rip depuis un téléphone ou un autre ordinateur du réseau local, \
+             écran éteint. Sans mot de passe : tout appareil du réseau local y a accès.",
+        )
+        .build();
+    let remote_row = adw::SwitchRow::builder().title("Activer la télécommande web").active(cfg.borrow().remote_enabled).build();
+    let port_row = adw::SpinRow::with_range(1024.0, 65535.0, 1.0);
+    port_row.set_title("Port");
+    port_row.set_value(cfg.borrow().remote_port as f64);
+    let url_row = adw::ActionRow::builder().title("Adresse à ouvrir dans le navigateur").subtitle_selectable(true).build();
+    let autostart_row = adw::SwitchRow::builder()
+        .title("Lancer à l'ouverture de session")
+        .subtitle("L'application démarre avec la session : utile pour un HTPC piloté à distance")
+        .active(crate::autostart::is_enabled())
+        .build();
+    remote_group.add(&remote_row);
+    remote_group.add(&port_row);
+    remote_group.add(&url_row);
+    remote_group.add(&autostart_row);
+    {
+        let refresh = {
+            let (url_row, port_row, remote_row) = (url_row.clone(), port_row.clone(), remote_row.clone());
+            move || {
+                url_row.set_subtitle(&crate::remote::urls(port_row.value() as u16).join("\n"));
+                url_row.set_sensitive(remote_row.is_active());
+                port_row.set_sensitive(remote_row.is_active());
+            }
+        };
+        refresh();
+        let r = refresh.clone();
+        port_row.connect_value_notify(move |_| r());
+        remote_row.connect_active_notify(move |_| refresh());
+        let parent = parent.clone();
+        autostart_row.connect_active_notify(move |row| {
+            if let Err(e) = crate::autostart::set_enabled(row.is_active()) {
+                let d = adw::AlertDialog::new(Some("Lancement automatique"), Some(&e.to_string()));
+                d.add_response("close", "Fermer");
+                d.present(Some(&parent));
+            }
+        });
+    }
+
     // --- Clé bêta ----------------------------------------------------------
     let key_group = adw::PreferencesGroup::builder()
         .title("Clé bêta MakeMKV")
@@ -168,6 +213,7 @@ pub fn show(parent: &adw::ApplicationWindow, cfg: Config, tx: Tx, on_close: impl
     page.add(&lang_group);
     page.add(&meta_group);
     page.add(&rip_group);
+    page.add(&remote_group);
     page.add(&key_group);
     dialog.add(&page);
 
@@ -182,6 +228,8 @@ pub fn show(parent: &adw::ApplicationWindow, cfg: Config, tx: Tx, on_close: impl
         c.min_length_secs = minlen_row.value() as u32;
         c.eject_when_done = eject_row.is_active();
         c.prepare_in_background = prepare_row.is_active();
+        c.remote_enabled = remote_row.is_active();
+        c.remote_port = port_row.value() as u16;
         let sources: Vec<String> = source_row.text().split_whitespace().map(String::from).collect();
         if !sources.is_empty() {
             c.beta_key_sources = sources;
